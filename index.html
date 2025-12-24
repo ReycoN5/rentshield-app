@@ -3,11 +3,11 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>Remnawave</title>
+    <title>RentShield</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <script type="module">
       import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
-      import { getFirestore, collection, doc, setDoc, onSnapshot, updateDoc, query, where, getDocs, orderBy, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+      import { getFirestore, collection, doc, setDoc, onSnapshot, updateDoc, query, where, getDocs, orderBy, serverTimestamp, addDoc } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 
       const firebaseConfig = {
         apiKey: "AIzaSyAkRl7PNxZHQIPiqCbmoTbOdLteKJ8DWwI",
@@ -29,7 +29,7 @@
         { id: 'month6', name: '6 месяцев', price: 1200, duration: '180 дней' }
       ];
 
-      const PHONE_NUMBER = "+7 (999) 123-45-67"; // Замени на свой
+      const PHONE_NUMBER = "+7 (951) 609-86-41"; // Замени на свой
 
       const App = {
         user: null,
@@ -37,7 +37,10 @@
         selectedPlan: null,
         pendingRequest: null,
         subscriptions: [],
-        tickets: [], // New: Store user support tickets
+        tickets: [], 
+        adminPayments: [],
+        adminTickets: [],
+        adminSearch: '',
         db
       };
 
@@ -45,7 +48,6 @@
         if (!window.Telegram?.WebApp) return;
         Telegram.WebApp.ready();
         Telegram.WebApp.expand();
-        // Allow Telegram to control the background color for seamless integration
         Telegram.WebApp.setBackgroundColor(Telegram.WebApp.themeParams.bg_color || '#000000');
         Telegram.WebApp.setHeaderColor(Telegram.WebApp.themeParams.bg_color || '#000000');
         
@@ -58,14 +60,11 @@
 
       App.showToast = (msg) => {
         const t = document.getElementById('toast');
-        // Reset animation
         t.style.animation = 'none';
-        t.offsetHeight; /* trigger reflow */
+        t.offsetHeight; 
         t.style.animation = null;
-        
         t.textContent = msg;
         t.classList.add('show');
-        
         if (App.toastTimeout) clearTimeout(App.toastTimeout);
         App.toastTimeout = setTimeout(() => t.classList.remove('show'), 3000);
       };
@@ -86,38 +85,56 @@
         const userId = tgUser.id.toString();
         const username = tgUser.username || tgUser.first_name || 'User';
         const role = ADMIN_IDS.includes(tgUser.id) ? 'admin' : 'user';
+        
+        // Display User ID immediately
+        document.getElementById('user-id-display').textContent = `ID: ${userId}`;
+
         await setDoc(doc(db, "users", userId), { username, role, telegramId: tgUser.id, lastLogin: serverTimestamp() }, { merge: true });
         App.user = { id: userId, username, role };
+        
         document.getElementById('admin-tab').style.display = role === 'admin' ? 'flex' : 'none';
         const nav = document.querySelector('.bottom-nav');
         nav.style.display = 'flex';
-        // Force reflow for animation
         void nav.offsetWidth;
         nav.classList.add('show');
+        
         App.loadUserData();
+        if(role === 'admin') App.initAdminListeners();
+        
         App.renderCurrentTab();
         App.haptic('light');
-        // Removed initial toast to keep UI clean on load
-        // App.showToast(`Привет, ${username}`);
       };
 
       App.loadUserData = () => {
-        // Load Subscriptions
         onSnapshot(query(collection(db, "subscriptions"), where("userId", "==", App.user.id)), (snap) => {
           App.subscriptions = snap.docs.map(d => ({ id: d.id, ...d.data() }));
           if (App.currentTab === 'subscriptions') App.renderCurrentTab();
         });
-        // Load Pending Payments
+        
         onSnapshot(query(collection(db, "paymentRequests"), where("userId", "==", App.user.id), where("status", "==", "pending")), (snap) => {
           App.pendingRequest = snap.empty ? null : { id: snap.docs[0].id, ...snap.docs[0].data() };
           document.getElementById('status-badge').classList.toggle('show', !!App.pendingRequest);
           if (App.currentTab === 'subscriptions') App.renderCurrentTab();
         });
-        // New: Load Support Tickets
-        onSnapshot(query(collection(db, "supportTickets"), where("userId", "==", App.user.id), orderBy("createdAt", "desc")), (snap) => {
+        
+        // Load messages for chat (sorted ASC for chat flow)
+        onSnapshot(query(collection(db, "supportTickets"), where("userId", "==", App.user.id), orderBy("createdAt", "asc")), (snap) => {
           App.tickets = snap.docs.map(d => ({ id: d.id, ...d.data() }));
           if (App.currentTab === 'support') App.renderCurrentTab();
         });
+      };
+      
+      // Admin Real-time Listeners
+      App.initAdminListeners = () => {
+          onSnapshot(query(collection(db, "paymentRequests"), where("status", "==", "pending")), (snap) => {
+              App.adminPayments = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+              if (App.currentTab === 'admin') App.renderAdminPanel();
+          });
+          
+          onSnapshot(query(collection(db, "supportTickets"), orderBy("createdAt", "desc")), (snap) => {
+              App.adminTickets = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+              if (App.currentTab === 'admin') App.renderAdminPanel();
+          });
       };
 
       App.showPaymentModal = (plan) => {
@@ -138,81 +155,105 @@
       App.confirmPayment = async () => {
         if (App.pendingRequest) {
           App.showToast('Заявка уже отправлена');
+          document.getElementById('payment-modal').classList.remove('show');
           return;
         }
-        const ref = doc(collection(db, "paymentRequests"));
-        await setDoc(ref, {
-          userId: App.user.id,
-          username: App.user.username,
-          planId: App.selectedPlan.id,
-          planName: App.selectedPlan.name,
-          price: App.selectedPlan.price,
-          status: 'pending',
-          createdAt: serverTimestamp()
-        });
+        
+        // Optimistic UI Update
         document.getElementById('payment-modal').classList.remove('show');
-        App.showToast('Заявка отправлена! Ожидайте подтверждения');
+        App.showToast('Обработка заявки...');
+        document.getElementById('status-badge').classList.add('show');
+        
+        try {
+            const ref = doc(collection(db, "paymentRequests"));
+            await setDoc(ref, {
+              userId: App.user.id,
+              username: App.user.username,
+              planId: App.selectedPlan.id,
+              planName: App.selectedPlan.name,
+              price: App.selectedPlan.price,
+              status: 'pending',
+              createdAt: serverTimestamp()
+            });
+            App.showToast('Заявка отправлена! Ожидайте подтверждения');
+        } catch (e) {
+            console.error(e);
+            App.showToast('Ошибка создания заявки');
+            document.getElementById('status-badge').classList.remove('show');
+        }
       };
 
-      // New: Submit Support Ticket
       App.submitTicket = async () => {
         const input = document.getElementById('ticket-message');
         const message = input.value.trim();
         if (!message) return;
 
-        const btn = document.getElementById('submit-ticket-btn');
-        btn.disabled = true;
-        btn.textContent = 'Отправка...';
+        input.value = '';
+        input.focus();
 
         try {
-            await setDoc(doc(collection(db, "supportTickets")), {
+            await addDoc(collection(db, "supportTickets"), {
                 userId: App.user.id,
                 username: App.user.username,
                 message: message,
+                sender: 'user', // Explicit sender
                 status: 'open',
                 createdAt: serverTimestamp()
             });
-            input.value = '';
-            App.showToast('Запрос отправлен');
-            App.haptic('medium');
+            App.haptic('light');
         } catch (e) {
             console.error(e);
             App.showToast('Ошибка отправки');
-        } finally {
-            btn.disabled = false;
-            btn.textContent = 'Отправить запрос';
         }
       };
 
-      // New: Admin Reply/Update Ticket
-      App.adminUpdateTicket = async (ticketId, action) => {
-        const ref = doc(db, "supportTickets", ticketId);
-        
-        if (action === 'close') {
-            await updateDoc(ref, { status: 'closed' });
-            App.showToast('Тикет закрыт');
-        } else if (action === 'reply') {
-            const replyInput = document.getElementById(`reply-${ticketId}`);
-            const reply = replyInput.value.trim();
-            if (!reply) return;
-            
-            await updateDoc(ref, { 
-                adminReply: reply,
-                status: 'answered'
+      // Admin Chat Reply
+      App.adminReplyToUser = async (targetUserId, message) => {
+          if(!message.trim()) return;
+          try {
+             await addDoc(collection(db, "supportTickets"), {
+                userId: targetUserId,
+                username: 'Admin', // Placeholder
+                message: message,
+                sender: 'admin',
+                status: 'answered',
+                createdAt: serverTimestamp()
+             });
+             App.showToast('Ответ отправлен');
+          } catch(e) {
+             console.error(e);
+             App.showToast('Ошибка ответа');
+          }
+      };
+      
+      App.handleAdminSearch = (e) => {
+          App.adminSearch = e.target.value.toLowerCase();
+          App.renderAdminPanel();
+      };
+
+      // Admin confirm payment Logic
+      App.adminConfirmPayment = async (id, userId, link, qrBase64) => {
+          if (!link && !qrBase64) return App.showToast('Добавьте ссылку или QR');
+          
+          await setDoc(doc(collection(db, "subscriptions")), {
+              userId: userId,
+              planName: 'Премиум',
+              status: 'active',
+              connectionLink: link,
+              qrBase64,
+              createdAt: serverTimestamp()
             });
-            App.showToast('Ответ отправлен');
-        }
-        App.renderAdminPanel(); // Refresh admin view
+            await updateDoc(doc(db, "paymentRequests", id), { status: 'confirmed' });
+            App.showToast('Подписка выдана');
       };
 
       App.renderCurrentTab = () => {
         const content = document.getElementById('content');
-        const title = document.getElementById('page-title');
-        content.innerHTML = '';
-        title.textContent = ''; // Title is handled in the header now
-
-        // Update Header Title based on Tab
         const headerTitle = document.getElementById('header-title');
+        
+        // Clear content logic handled per tab to avoid full flicker if possible, 
+        // but sticking to simple re-render for consistency
+        content.innerHTML = '';
 
         if (App.currentTab === 'subscriptions') {
           headerTitle.textContent = 'Мои подписки';
@@ -295,77 +336,100 @@
             </div>
           `;
         } else if (App.currentTab === 'support') {
-           // New: Support Tab Content
-           headerTitle.textContent = 'Поддержка';
+           headerTitle.textContent = 'Чат поддержки';
            
-           // Form
-           const formDiv = document.createElement('div');
-           formDiv.className = 'card fade-in';
-           formDiv.innerHTML = `
-             <h3 style="margin-bottom:12px;">Новый запрос</h3>
-             <textarea id="ticket-message" class="styled-input" rows="3" placeholder="Опишите вашу проблему..."></textarea>
-             <button id="submit-ticket-btn" class="btn primary" onclick="App.submitTicket()">Отправить запрос</button>
-           `;
-           content.appendChild(formDiv);
+           const chatContainer = document.createElement('div');
+           chatContainer.className = 'chat-container fade-in';
+           
+           if (App.tickets.length === 0) {
+               chatContainer.innerHTML = '<div class="empty-state"><p class="hint">Напишите нам, мы поможем!</p></div>';
+           } else {
+               App.tickets.forEach(msg => {
+                   // Handle legacy tickets (adminReply)
+                   const msgEl = document.createElement('div');
+                   const isUser = msg.sender !== 'admin';
+                   msgEl.className = `chat-bubble ${isUser ? 'user' : 'admin'}`;
+                   msgEl.innerHTML = `<div class="chat-text">${msg.message}</div><div class="chat-time">${msg.createdAt?.toDate()?.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) || ''}</div>`;
+                   chatContainer.appendChild(msgEl);
 
-           // List
-           if (App.tickets.length > 0) {
-               const listTitle = document.createElement('h3');
-               listTitle.className = 'section-title';
-               listTitle.textContent = 'Ваши запросы';
-               content.appendChild(listTitle);
-
-               App.tickets.forEach(ticket => {
-                   const tCard = document.createElement('div');
-                   tCard.className = 'card fade-in';
-                   
-                   let statusClass = 'neutral';
-                   let statusText = 'Открыт';
-                   if(ticket.status === 'answered') { statusClass = 'active'; statusText = 'Ответ получен'; }
-                   if(ticket.status === 'closed') { statusClass = 'closed'; statusText = 'Закрыт'; }
-
-                   tCard.innerHTML = `
-                     <div class="card-header">
-                        <span class="status ${statusClass}">${statusText}</span>
-                        <span class="date-badge">${ticket.createdAt?.toDate()?.toLocaleDateString() || ''}</span>
-                     </div>
-                     <p style="margin-bottom:8px; font-weight:500;">${ticket.message}</p>
-                     ${ticket.adminReply ? `
-                        <div class="admin-reply">
-                            <div class="reply-label">Ответ поддержки:</div>
-                            <p>${ticket.adminReply}</p>
-                        </div>
-                     ` : ''}
-                   `;
-                   content.appendChild(tCard);
+                   if (msg.adminReply) {
+                       const replyEl = document.createElement('div');
+                       replyEl.className = 'chat-bubble admin';
+                       replyEl.innerHTML = `<div class="chat-text">${msg.adminReply}</div><div class="chat-time">Ответ</div>`;
+                       chatContainer.appendChild(replyEl);
+                   }
                });
            }
+           
+           // Scroll to bottom
+           setTimeout(() => chatContainer.scrollTop = chatContainer.scrollHeight, 100);
+
+           content.appendChild(chatContainer);
+
+           // Input Area
+           const inputArea = document.createElement('div');
+           inputArea.className = 'chat-input-area';
+           inputArea.innerHTML = `
+             <input type="text" id="ticket-message" placeholder="Сообщение..." autocomplete="off">
+             <button id="submit-ticket-btn" onclick="App.submitTicket()">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+             </button>
+           `;
+           content.appendChild(inputArea);
+           
+           // Handle Enter key
+           setTimeout(() => {
+              document.getElementById('ticket-message').addEventListener('keypress', (e) => {
+                  if(e.key === 'Enter') App.submitTicket();
+              });
+           }, 0);
 
         } else if (App.currentTab === 'admin') {
           if (App.user.role !== 'admin') return;
           headerTitle.textContent = 'Админ панель';
-          content.innerHTML = '<div class="loader"></div>';
           App.renderAdminPanel();
         }
       };
 
-      App.renderAdminPanel = async () => {
+      App.renderAdminPanel = () => {
         const content = document.getElementById('content');
         content.innerHTML = '';
         
-        // --- Payments Section ---
-        const paySnap = await getDocs(query(collection(db, "paymentRequests"), where("status", "==", "pending")));
+        // Search Bar
+        const searchContainer = document.createElement('div');
+        searchContainer.className = 'admin-search-container';
+        searchContainer.innerHTML = `
+            <input type="text" placeholder="Поиск по ID пользователя..." class="styled-input" value="${App.adminSearch}" oninput="App.handleAdminSearch(event)">
+        `;
+        content.appendChild(searchContainer);
         
+        // Filter Data
+        const filter = (list) => {
+            if(!App.adminSearch) return list;
+            return list.filter(item => item.userId.toLowerCase().includes(App.adminSearch));
+        };
+
+        const filteredPayments = filter(App.adminPayments);
+        
+        // Group Tickets by User for Chat View
+        const chats = {};
+        App.adminTickets.forEach(t => {
+            if (!chats[t.userId]) chats[t.userId] = { username: t.username, userId: t.userId, messages: [] };
+            chats[t.userId].messages.push(t);
+        });
+        // Filter chats by userId
+        const filteredChatUserIds = Object.keys(chats).filter(uid => uid.toLowerCase().includes(App.adminSearch));
+
+        // --- Payments Section ---
         const payTitle = document.createElement('h3');
         payTitle.className = 'section-title fade-in';
-        payTitle.textContent = `Заявки на оплату (${paySnap.size})`;
+        payTitle.textContent = `Заявки на оплату (${filteredPayments.length})`;
         content.appendChild(payTitle);
 
-        if (paySnap.empty) {
-          content.innerHTML += `<div class="empty-state fade-in" style="padding: 20px;"><p class="hint">Нет заявок</p></div>`;
+        if (filteredPayments.length === 0) {
+          content.innerHTML += `<div class="empty-state fade-in" style="padding: 10px;"><p class="hint">Нет заявок</p></div>`;
         } else {
-            paySnap.forEach(d => {
-              const req = { id: d.id, ...d.data() };
+            filteredPayments.forEach(req => {
               const card = document.createElement('div');
               card.className = 'card admin-card fade-in';
               card.innerHTML = `
@@ -390,105 +454,83 @@
                     </div>
                     <div id="preview-${req.id}" class="preview-area"></div>
                 </div>
-                <button class="btn primary small" onclick="App.confirmPayment('${req.id}')">Подтвердить и выдать</button>
+                <button class="btn primary small" id="confirm-btn-${req.id}">Подтвердить</button>
               `;
               content.appendChild(card);
               
+              // Event Listeners for file preview
               const fileInput = document.getElementById(`qr-${req.id}`);
               fileInput.onchange = e => {
                 const file = e.target.files[0];
-                const label = fileInput.previousElementSibling;
                 if (file) {
-                  label.style.borderColor = 'var(--tg-theme-button-color)';
-                  label.style.color = 'var(--tg-theme-button-color)';
-                  label.innerHTML = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"></polyline></svg> ${file.name.substring(0, 10)}...`;
-                  
                   const reader = new FileReader();
                   reader.onload = ev => document.getElementById(`preview-${req.id}`).innerHTML = `<img src="${ev.target.result}" class="qr-preview">`;
                   reader.readAsDataURL(file);
                 }
               };
+              
+              document.getElementById(`confirm-btn-${req.id}`).onclick = async () => {
+                  const link = document.getElementById(`link-${req.id}`).value.trim();
+                  const qrFile = document.getElementById(`qr-${req.id}`).files[0];
+                  let qrBase64 = '';
+                  if (qrFile) {
+                      qrBase64 = await new Promise(r => {
+                        const reader = new FileReader();
+                        reader.onload = e => r(e.target.result);
+                        reader.readAsDataURL(qrFile);
+                      });
+                  }
+                  App.adminConfirmPayment(req.id, req.userId, link, qrBase64);
+              };
             });
         }
 
-        // --- Support Tickets Section ---
-        const ticketSnap = await getDocs(query(collection(db, "supportTickets"), orderBy("createdAt", "desc")));
-        // Filter out closed tickets locally or via query if needed. Showing all for now.
-        
+        // --- Chats Section ---
         const supportTitle = document.createElement('h3');
         supportTitle.className = 'section-title fade-in';
         supportTitle.style.marginTop = '32px';
-        supportTitle.textContent = `Тикеты поддержки`;
+        supportTitle.textContent = `Чаты (${filteredChatUserIds.length})`;
         content.appendChild(supportTitle);
 
-        if(ticketSnap.empty) {
-             content.innerHTML += `<div class="empty-state fade-in" style="padding: 20px;"><p class="hint">Нет тикетов</p></div>`;
-        } else {
-             ticketSnap.forEach(d => {
-                 const t = { id: d.id, ...d.data() };
-                 if (t.status === 'closed') return; // Optional: Hide closed tickets to keep admin clean
-
-                 const tCard = document.createElement('div');
-                 tCard.className = 'card admin-card fade-in';
-                 tCard.innerHTML = `
-                    <div class="admin-header">
-                        <div>
-                             <p class="username">@${t.username || 'User'}</p>
-                             <p class="user-id">Status: <span style="color:var(--tg-theme-button-color)">${t.status}</span></p>
-                        </div>
-                        <div class="date-badge">${t.createdAt?.toDate()?.toLocaleDateString()}</div>
+        filteredChatUserIds.forEach(userId => {
+            const chat = chats[userId];
+            // Sort messages desc (newest first) for preview, but we want to show chat history
+            // Actually App.adminTickets is sorted desc. So chat.messages[0] is the latest.
+            const lastMsg = chat.messages[0];
+            
+            const chatCard = document.createElement('div');
+            chatCard.className = 'card admin-card fade-in';
+            chatCard.innerHTML = `
+                <div class="admin-header">
+                    <div>
+                        <p class="username">@${chat.username || 'User'}</p>
+                        <p class="user-id">ID: ${userId}</p>
                     </div>
-                    <div class="admin-body">
-                        <p style="margin-bottom:12px; background:rgba(255,255,255,0.05); padding:8px; border-radius:8px;">${t.message}</p>
-                        ${t.adminReply ? `<p class="hint" style="margin-bottom:8px;">Ваш ответ: ${t.adminReply}</p>` : ''}
-                        
-                        <div class="input-group">
-                            <input type="text" id="reply-${t.id}" placeholder="Текст ответа..." class="styled-input">
-                        </div>
-                        <div style="display:flex; gap:8px;">
-                            <button class="btn primary small" onclick="App.adminUpdateTicket('${t.id}', 'reply')">Ответить</button>
-                            <button class="btn secondary small" onclick="App.adminUpdateTicket('${t.id}', 'close')" style="color:#ff3b30">Закрыть</button>
-                        </div>
+                    <div class="date-badge">${lastMsg.createdAt?.toDate()?.toLocaleDateString()}</div>
+                </div>
+                <div class="admin-body">
+                    <div class="chat-preview">
+                        ${chat.messages.slice(0, 3).map(m => `
+                            <div style="font-size:12px; margin-bottom:4px; color: ${m.sender==='admin'?'var(--tg-theme-button-color)':'inherit'}">
+                                <b>${m.sender==='admin'?'Вы':'User'}:</b> ${m.message}
+                            </div>
+                        `).join('')}
                     </div>
-                 `;
-                 content.appendChild(tCard);
-             });
-        }
-      };
-
-      App.onPaidClick = async () => {
-        if (App.pendingRequest) return App.showToast('Заявка уже отправлена');
-        const ref = doc(collection(db, "paymentRequests"));
-        await setDoc(ref, { userId: App.user.id, username: App.user.username, status: 'pending', createdAt: serverTimestamp() });
-        App.showToast('Заявка отправлена');
-      };
-
-      window.App = App;
-
-      App.confirmPayment = async (id) => {
-        const link = document.getElementById(`link-${id}`).value.trim();
-        const qrFile = document.getElementById(`qr-${id}`).files[0];
-        let qrBase64 = '';
-        if (qrFile) {
-          qrBase64 = await new Promise(r => {
-            const reader = new FileReader();
-            reader.onload = e => r(e.target.result);
-            reader.readAsDataURL(qrFile);
-          });
-        }
-        if (!link && !qrBase64) return App.showToast('Добавьте ссылку или QR');
-        const req = await getDoc(doc(db, "paymentRequests", id));
-        await setDoc(doc(collection(db, "subscriptions")), {
-          userId: req.data().userId,
-          planName: 'Премиум',
-          status: 'active',
-          connectionLink: link,
-          qrBase64,
-          createdAt: serverTimestamp()
+                    <div class="input-group" style="display:flex; gap:8px; margin-top:8px;">
+                        <input type="text" id="reply-to-${userId}" placeholder="Написать..." class="styled-input" style="margin-bottom:0;">
+                        <button class="btn primary small" style="width:auto;" onclick="App.handleAdminReply('${userId}')">Send</button>
+                    </div>
+                </div>
+            `;
+            content.appendChild(chatCard);
         });
-        await updateDoc(doc(db, "paymentRequests", id), { status: 'confirmed' });
-        App.showToast('Подписка выдана');
-        App.renderAdminPanel();
+      };
+      
+      App.handleAdminReply = (userId) => {
+          const input = document.getElementById(`reply-to-${userId}`);
+          const msg = input.value;
+          App.adminReplyToUser(userId, msg);
+          input.value = '';
       };
 
       document.addEventListener('DOMContentLoaded', () => {
@@ -498,7 +540,6 @@
             e.currentTarget.classList.add('active');
             App.currentTab = e.currentTarget.dataset.tab;
             
-            // Add slight bump animation to icon
             const icon = e.currentTarget.querySelector('svg');
             icon.style.transform = 'scale(1.2)';
             setTimeout(() => icon.style.transform = 'scale(1)', 200);
@@ -508,7 +549,6 @@
             });
         });
 
-        // Close modal on click outside
         document.getElementById('payment-modal').addEventListener('click', (e) => {
             if(e.target.id === 'payment-modal') {
                 e.target.classList.remove('show');
@@ -521,9 +561,7 @@
     </script>
 
     <style>
-      /* --- Variables & Reset --- */
       :root {
-        /* Default Dark Theme Fallback */
         --tg-theme-bg-color: #000000;
         --tg-theme-secondary-bg-color: #1c1c1e;
         --tg-theme-text-color: #ffffff;
@@ -531,10 +569,8 @@
         --tg-theme-link-color: #0a84ff;
         --tg-theme-button-color: #0a84ff;
         --tg-theme-button-text-color: #ffffff;
-        
         --safe-area-top: env(safe-area-inset-top, 20px);
         --safe-area-bottom: env(safe-area-inset-bottom, 20px);
-        
         --radius-l: 24px;
         --radius-m: 16px;
         --radius-s: 12px;
@@ -548,12 +584,10 @@
         color: var(--tg-theme-text-color);
         min-height: 100vh;
         overflow-x: hidden;
-        /* Subtle gradient background for premium feel */
         background-image: radial-gradient(circle at 50% 0%, rgba(10, 132, 255, 0.15), transparent 60%);
         background-attachment: fixed;
       }
 
-      /* --- Layout --- */
       .container {
         padding: calc(var(--safe-area-top) + 20px) 16px calc(var(--safe-area-bottom) + 90px);
         max-width: 600px;
@@ -563,8 +597,7 @@
         flex-direction: column;
       }
 
-      /* --- Typography --- */
-      h2#page-title { display: none; } /* Hidden, replaced by sticky header */
+      h2#page-title { display: none; } 
 
       .header-title-container {
         margin-bottom: 24px;
@@ -590,7 +623,6 @@
         font-weight: 500;
       }
 
-      /* --- Cards & Containers --- */
       .card {
         background: var(--tg-theme-secondary-bg-color);
         border-radius: var(--radius-l);
@@ -598,14 +630,13 @@
         margin-bottom: 16px;
         position: relative;
         overflow: hidden;
-        /* Subtle border for separation */
         box-shadow: 0 4px 20px rgba(0,0,0,0.2); 
       }
 
       .plan-card {
         background: var(--tg-theme-secondary-bg-color);
         padding: 16px 20px;
-        margin-bottom: 1px; /* Separator style */
+        margin-bottom: 1px;
         display: flex;
         justify-content: space-between;
         align-items: center;
@@ -613,359 +644,120 @@
         transition: background 0.2s;
         position: relative;
       }
-      
       .plan-card:first-child { border-top-left-radius: var(--radius-l); border-top-right-radius: var(--radius-l); }
       .plan-card:last-child { border-bottom-left-radius: var(--radius-l); border-bottom-right-radius: var(--radius-l); margin-bottom: 16px; }
-      
       .plans-grid {
         display: flex;
         flex-direction: column;
         border-radius: var(--radius-l);
         overflow: hidden;
-        background: var(--tg-theme-secondary-bg-color); /* For the gaps */
+        background: var(--tg-theme-secondary-bg-color);
       }
-
-      .plan-card:active {
-        background: rgba(255,255,255,0.05);
-      }
-
+      .plan-card:active { background: rgba(255,255,255,0.05); }
       .plan-info h3 { font-size: 17px; font-weight: 600; margin-bottom: 4px; }
       .plan-info .duration { font-size: 14px; color: var(--tg-theme-hint-color); }
-      
-      .plan-price {
-        font-size: 17px;
-        font-weight: 600;
-        color: var(--tg-theme-button-color);
-        display: flex;
-        align-items: center;
-        gap: 8px;
-      }
+      .plan-price { font-size: 17px; font-weight: 600; color: var(--tg-theme-button-color); display: flex; align-items: center; gap: 8px; }
 
-      .subscription-card {
-        border: 1px solid rgba(255,255,255,0.05);
-      }
-
-      .card-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        margin-bottom: 16px;
-      }
-      
+      .subscription-card { border: 1px solid rgba(255,255,255,0.05); }
+      .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
       .card-header h3 { font-size: 20px; font-weight: 700; }
 
-      .status {
-        font-size: 12px;
-        padding: 4px 10px;
-        border-radius: 100px;
-        font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-      }
+      .status { font-size: 12px; padding: 4px 10px; border-radius: 100px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
       .status.active { background: rgba(52, 199, 89, 0.2); color: #32d74b; }
       .status.neutral { background: rgba(255, 255, 255, 0.1); color: var(--tg-theme-text-color); }
       .status.closed { background: rgba(255, 59, 48, 0.2); color: #ff3b30; }
 
-      .link-container {
-        background: rgba(0,0,0,0.2);
-        padding: 12px;
-        border-radius: var(--radius-s);
-        margin-bottom: 16px;
-      }
-      
+      .link-container { background: rgba(0,0,0,0.2); padding: 12px; border-radius: var(--radius-s); margin-bottom: 16px; }
       .link-label { font-size: 11px; color: var(--tg-theme-hint-color); margin-bottom: 4px; text-transform: uppercase; }
       .link { font-family: monospace; font-size: 14px; color: var(--tg-theme-text-color); word-break: break-all; opacity: 0.9; }
       .text-truncate { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; }
-
       .qr-container { display: flex; justify-content: center; margin: 16px 0; background: #fff; padding: 12px; border-radius: var(--radius-m); width: fit-content; margin: 16px auto;}
       .qr { width: 140px; height: 140px; display: block; }
       .qr-preview { max-width: 100%; border-radius: var(--radius-s); margin-top: 12px; }
 
-      .admin-reply {
-          background: rgba(10, 132, 255, 0.1);
-          border-left: 3px solid var(--tg-theme-button-color);
-          padding: 12px;
-          border-radius: 0 var(--radius-s) var(--radius-s) 0;
-          margin-top: 12px;
-      }
-      .reply-label { font-size:11px; font-weight:700; color: var(--tg-theme-button-color); margin-bottom:4px; text-transform:uppercase;}
-
-      /* --- Buttons --- */
       .btn {
-        width: 100%;
-        padding: 16px;
-        border-radius: var(--radius-m);
-        border: none;
-        font-size: 16px;
-        font-weight: 600;
-        cursor: pointer;
-        transition: transform 0.1s, opacity 0.2s;
-        display: flex;
-        justify-content: center;
-        align-items: center;
-        gap: 8px;
-        position: relative;
-        overflow: hidden;
+        width: 100%; padding: 16px; border-radius: var(--radius-m); border: none; font-size: 16px; font-weight: 600; cursor: pointer; transition: transform 0.1s, opacity 0.2s; display: flex; justify-content: center; align-items: center; gap: 8px; position: relative; overflow: hidden;
       }
-
       .btn:active { transform: scale(0.98); opacity: 0.9; }
+      .btn.primary { background: var(--tg-theme-button-color); color: var(--tg-theme-button-text-color); box-shadow: 0 4px 12px rgba(10, 132, 255, 0.3); }
+      .btn.secondary { background: rgba(255,255,255,0.08); color: var(--tg-theme-button-color); font-size: 15px; padding: 12px; }
+      .btn.small { padding: 10px; font-size: 14px; }
 
-      .btn.primary {
-        background: var(--tg-theme-button-color);
-        color: var(--tg-theme-button-text-color);
-        box-shadow: 0 4px 12px rgba(10, 132, 255, 0.3);
-      }
-
-      .btn.secondary {
-        background: rgba(255,255,255,0.08);
-        color: var(--tg-theme-button-color);
-        font-size: 15px;
-        padding: 12px;
-      }
-      
-      .btn.small { padding: 12px; font-size: 15px; }
-
-      /* --- Inputs (Admin) --- */
-      .styled-input {
-        width: 100%;
-        background: var(--tg-theme-bg-color);
-        border: 1px solid rgba(255,255,255,0.1);
-        color: var(--tg-theme-text-color);
-        padding: 14px;
-        border-radius: var(--radius-s);
-        font-size: 16px;
-        outline: none;
-        transition: border-color 0.2s;
-        margin-bottom: 12px;
-        font-family: inherit;
-      }
+      .styled-input { width: 100%; background: var(--tg-theme-bg-color); border: 1px solid rgba(255,255,255,0.1); color: var(--tg-theme-text-color); padding: 14px; border-radius: var(--radius-s); font-size: 16px; outline: none; transition: border-color 0.2s; margin-bottom: 12px; font-family: inherit; }
       .styled-input:focus { border-color: var(--tg-theme-button-color); }
-      textarea.styled-input { resize: vertical; min-height: 80px; }
-      
-      .file-label {
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        gap: 8px;
-        width: 100%;
-        padding: 12px;
-        border: 2px dashed rgba(255,255,255,0.15);
-        border-radius: var(--radius-s);
-        color: var(--tg-theme-hint-color);
-        cursor: pointer;
-        font-size: 14px;
-        margin-bottom: 16px;
-      }
+      .file-label { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; padding: 12px; border: 2px dashed rgba(255,255,255,0.15); border-radius: var(--radius-s); color: var(--tg-theme-hint-color); cursor: pointer; font-size: 14px; margin-bottom: 16px; }
       .hidden-input { display: none; }
 
-      /* --- Tutorial --- */
       .tutorial-list { display: flex; flex-direction: column; gap: 24px; }
       .tutorial-step { display: flex; gap: 16px; }
-      .step-number {
-        width: 32px; height: 32px;
-        background: var(--tg-theme-button-color);
-        color: var(--tg-theme-button-text-color);
-        border-radius: 50%;
-        display: flex; align-items: center; justify-content: center;
-        font-weight: 700; flex-shrink: 0;
-        font-size: 16px;
-      }
+      .step-number { width: 32px; height: 32px; background: var(--tg-theme-button-color); color: var(--tg-theme-button-text-color); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 700; flex-shrink: 0; font-size: 16px; }
       .step-content h3 { font-size: 17px; margin-bottom: 4px; font-weight: 600; }
       .step-content p { font-size: 15px; color: var(--tg-theme-hint-color); line-height: 1.4; }
 
-      /* --- Empty State --- */
-      .empty-state {
-        text-align: center;
-        padding: 40px 20px;
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        gap: 16px;
-      }
-      .icon-box {
-        font-size: 48px;
-        margin-bottom: 8px;
-        filter: grayscale(1);
-        opacity: 0.5;
-      }
+      .empty-state { text-align: center; padding: 40px 20px; display: flex; flex-direction: column; align-items: center; gap: 16px; }
+      .icon-box { font-size: 48px; margin-bottom: 8px; filter: grayscale(1); opacity: 0.5; }
 
-      /* --- Bottom Navigation --- */
-      .bottom-nav {
-        position: fixed;
-        bottom: 0;
-        left: 0;
-        right: 0;
-        background: rgba(28, 28, 30, 0.85); /* Fallback */
-        background: var(--tg-theme-secondary-bg-color);
-        backdrop-filter: blur(20px);
-        -webkit-backdrop-filter: blur(20px);
-        border-top: 0.5px solid rgba(255,255,255,0.1);
-        padding: 8px 16px calc(var(--safe-area-bottom) + 4px);
-        display: none;
-        justify-content: space-between;
-        z-index: 100;
-        opacity: 0;
-        transform: translateY(100%);
-        transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.4s;
-      }
+      .bottom-nav { position: fixed; bottom: 0; left: 0; right: 0; background: var(--tg-theme-secondary-bg-color); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); border-top: 0.5px solid rgba(255,255,255,0.1); padding: 8px 16px calc(var(--safe-area-bottom) + 4px); display: none; justify-content: space-between; z-index: 100; opacity: 0; transform: translateY(100%); transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.4s; }
       .bottom-nav.show { opacity: 1; transform: translateY(0); }
-
-      .nav-item {
-        flex: 1;
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
-        padding: 4px;
-        color: var(--tg-theme-hint-color);
-        cursor: pointer;
-        transition: color 0.2s;
-        border-radius: 8px;
-      }
-      
+      .nav-item { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 4px; color: var(--tg-theme-hint-color); cursor: pointer; transition: color 0.2s; border-radius: 8px; }
       .nav-item svg { width: 24px; height: 24px; margin-bottom: 4px; transition: transform 0.2s; stroke-width: 2px; }
       .nav-item div { font-size: 10px; font-weight: 500; letter-spacing: 0.2px; }
-      
       .nav-item.active { color: var(--tg-theme-button-color); }
       .nav-item.active svg { stroke: var(--tg-theme-button-color); }
 
-      /* --- Modal --- */
-      .modal {
-        position: fixed;
-        inset: 0;
-        background: rgba(0,0,0,0.6);
-        backdrop-filter: blur(4px);
-        -webkit-backdrop-filter: blur(4px);
-        display: none;
-        align-items: flex-end;
-        justify-content: center;
-        z-index: 1000;
-        opacity: 0;
-        transition: opacity 0.3s;
-      }
+      .modal { position: fixed; inset: 0; background: rgba(0,0,0,0.6); backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px); display: none; align-items: flex-end; justify-content: center; z-index: 1000; opacity: 0; transition: opacity 0.3s; }
       .modal.show { display: flex; opacity: 1; }
-      
-      .modal-content {
-        background: var(--tg-theme-secondary-bg-color);
-        width: 100%;
-        max-width: 500px;
-        border-radius: 32px 32px 0 0;
-        padding: 32px 24px calc(var(--safe-area-bottom) + 24px);
-        box-shadow: 0 -10px 40px rgba(0,0,0,0.3);
-        transform: translateY(100%);
-        transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1);
-      }
+      .modal-content { background: var(--tg-theme-secondary-bg-color); width: 100%; max-width: 500px; border-radius: 32px 32px 0 0; padding: 32px 24px calc(var(--safe-area-bottom) + 24px); box-shadow: 0 -10px 40px rgba(0,0,0,0.3); transform: translateY(100%); transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1); }
       .modal.show .modal-content { transform: translateY(0); }
-
-      .modal-drag {
-        width: 40px; height: 4px; background: rgba(255,255,255,0.2);
-        border-radius: 2px; margin: 0 auto 24px;
-      }
-
+      .modal-drag { width: 40px; height: 4px; background: rgba(255,255,255,0.2); border-radius: 2px; margin: 0 auto 24px; }
       .modal h3 { font-size: 24px; text-align: center; margin-bottom: 8px; }
       .modal .price { font-size: 42px; font-weight: 800; text-align: center; color: var(--tg-theme-text-color); margin: 24px 0; letter-spacing: -1px; }
-      
-      .modal-phone {
-        background: var(--tg-theme-bg-color);
-        padding: 20px;
-        border-radius: var(--radius-m);
-        text-align: center;
-        font-size: 20px;
-        font-weight: 700;
-        font-family: monospace;
-        letter-spacing: 1px;
-        margin: 16px 0 24px;
-        border: 1px solid rgba(255,255,255,0.05);
-      }
+      .modal-phone { background: var(--tg-theme-bg-color); padding: 20px; border-radius: var(--radius-m); text-align: center; font-size: 20px; font-weight: 700; font-family: monospace; letter-spacing: 1px; margin: 16px 0 24px; border: 1px solid rgba(255,255,255,0.05); }
 
-      /* --- Status Badge --- */
-      #status-badge {
-        position: fixed;
-        top: calc(var(--safe-area-top) + 12px);
-        right: 16px;
-        background: rgba(255, 159, 10, 0.2);
-        color: #ff9f0a;
-        backdrop-filter: blur(10px);
-        border: 1px solid rgba(255, 159, 10, 0.3);
-        padding: 6px 12px;
-        border-radius: 100px;
-        font-weight: 600;
-        font-size: 12px;
-        opacity: 0;
-        transform: translateY(-20px);
-        transition: all 0.4s;
-        z-index: 90;
-        pointer-events: none;
-      }
+      #status-badge { position: fixed; top: calc(var(--safe-area-top) + 12px); right: 16px; background: rgba(255, 159, 10, 0.2); color: #ff9f0a; backdrop-filter: blur(10px); border: 1px solid rgba(255, 159, 10, 0.3); padding: 6px 12px; border-radius: 100px; font-weight: 600; font-size: 12px; opacity: 0; transform: translateY(-20px); transition: all 0.4s; z-index: 90; pointer-events: none; }
       #status-badge.show { opacity: 1; transform: translateY(0); pointer-events: auto; }
-
-      /* --- Toast --- */
-      #toast {
-        position: fixed;
-        top: 50%;
-        left: 50%;
-        transform: translate(-50%, -50%) scale(0.9);
-        background: rgba(30, 30, 30, 0.9);
-        color: #fff;
-        padding: 16px 24px;
-        border-radius: 16px;
-        font-weight: 500;
-        box-shadow: 0 10px 40px rgba(0,0,0,0.4);
-        pointer-events: none;
-        opacity: 0;
-        transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
-        z-index: 2000;
-        text-align: center;
-        max-width: 80%;
-        backdrop-filter: blur(10px);
-      }
+      #toast { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%) scale(0.9); background: rgba(30, 30, 30, 0.9); color: #fff; padding: 16px 24px; border-radius: 16px; font-weight: 500; box-shadow: 0 10px 40px rgba(0,0,0,0.4); pointer-events: none; opacity: 0; transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1); z-index: 2000; text-align: center; max-width: 80%; backdrop-filter: blur(10px); }
       #toast.show { opacity: 1; transform: translate(-50%, -50%) scale(1); }
 
-      /* --- Admin Specific --- */
       .admin-card { padding: 0; }
-      .admin-header {
-        padding: 16px;
-        background: rgba(255,255,255,0.03);
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        border-bottom: 1px solid rgba(255,255,255,0.05);
-      }
+      .admin-header { padding: 16px; background: rgba(255,255,255,0.03); display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(255,255,255,0.05); }
       .username { font-weight: 600; font-size: 15px; }
       .user-id { font-size: 12px; color: var(--tg-theme-hint-color); font-family: monospace; }
       .date-badge { font-size: 11px; color: var(--tg-theme-hint-color); }
       .admin-body { padding: 16px; }
 
-      /* --- Animations --- */
-      @keyframes fadeIn {
-        from { opacity: 0; transform: translateY(10px); }
-        to { opacity: 1; transform: translateY(0); }
-      }
+      /* Chat Styles */
+      .chat-container { display: flex; flex-direction: column; gap: 12px; height: calc(100vh - 240px); overflow-y: auto; padding-bottom: 20px; }
+      .chat-bubble { max-width: 80%; padding: 10px 14px; border-radius: 18px; position: relative; font-size: 15px; line-height: 1.4; animation: fadeIn 0.3s ease; }
+      .chat-bubble.user { align-self: flex-end; background: var(--tg-theme-button-color); color: #fff; border-bottom-right-radius: 4px; }
+      .chat-bubble.admin { align-self: flex-start; background: var(--tg-theme-secondary-bg-color); color: var(--tg-theme-text-color); border-bottom-left-radius: 4px; border: 1px solid rgba(255,255,255,0.1); }
+      .chat-time { font-size: 10px; opacity: 0.7; margin-top: 4px; text-align: right; }
       
+      .chat-input-area { position: fixed; bottom: calc(var(--safe-area-bottom) + 65px); left: 16px; right: 16px; display: flex; gap: 8px; background: var(--tg-theme-secondary-bg-color); padding: 8px; border-radius: 24px; border: 1px solid rgba(255,255,255,0.1); backdrop-filter: blur(20px); box-shadow: 0 4px 20px rgba(0,0,0,0.3); z-index: 50; }
+      .chat-input-area input { flex: 1; background: transparent; border: none; color: var(--tg-theme-text-color); padding: 8px 12px; font-size: 16px; outline: none; }
+      .chat-input-area button { width: 40px; height: 40px; border-radius: 50%; background: var(--tg-theme-button-color); border: none; color: #fff; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+      
+      /* User ID Badge */
+      #user-id-display { position: fixed; top: calc(var(--safe-area-top) + 12px); left: 16px; font-size: 11px; font-family: monospace; color: var(--tg-theme-hint-color); background: rgba(0,0,0,0.3); padding: 4px 8px; border-radius: 8px; backdrop-filter: blur(4px); z-index: 90; }
+
+      @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
       .fade-in { animation: fadeIn 0.4s ease-out forwards; }
-      
-      .loader {
-        width: 24px; height: 24px;
-        border: 3px solid rgba(255,255,255,0.1);
-        border-top-color: var(--tg-theme-button-color);
-        border-radius: 50%;
-        margin: 40px auto;
-        animation: spin 1s linear infinite;
-      }
+      .loader { width: 24px; height: 24px; border: 3px solid rgba(255,255,255,0.1); border-top-color: var(--tg-theme-button-color); border-radius: 50%; margin: 40px auto; animation: spin 1s linear infinite; }
       @keyframes spin { to { transform: rotate(360deg); } }
 
     </style>
 </head>
 <body>
   <div id="main-app">
+    <div id="user-id-display"></div>
     <div id="status-badge">⏳ Ожидает подтверждения</div>
     
     <div class="container">
       <div class="header-title-container">
-          <h1 id="header-title">Remnawave</h1>
+          <h1 id="header-title">RentShield</h1>
       </div>
       
-      <h2 id="page-title">Remnawave</h2> <!-- Logic hook preserved -->
+      <h2 id="page-title">RentShield</h2>
       
       <div id="content">
         <div class="loader"></div>
@@ -973,7 +765,6 @@
     </div>
   </div>
 
-  <!-- Payment Modal (Bottom Sheet style) -->
   <div id="payment-modal" class="modal">
     <div class="modal-content">
       <div class="modal-drag"></div>
@@ -984,7 +775,7 @@
       
       <div class="modal-info-block">
         <p class="hint center">Переведите точную сумму на номер:</p>
-        <div class="modal-phone" id="modal-phone">+7 (999) 123-45-67</div>
+        <div class="modal-phone" id="modal-phone">+7 (951) 609-86-41</div>
       </div>
       
       <div style="display: flex; gap: 12px;">
@@ -1001,7 +792,6 @@
 
   <nav class="bottom-nav">
     <div class="nav-item active" data-tab="subscriptions">
-      <!-- Rounded, cleaner icons -->
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
       <div>Подписки</div>
     </div>
