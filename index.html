@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>Remnawave</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+
+    <script type="module">
+      import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+      import { getFirestore, collection, doc, setDoc, onSnapshot, updateDoc, query, where, getDocs, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+
+      // ВСТАВЬ СВОЙ FIREBASE CONFIG
+      const firebaseConfig = {
+        apiKey: "AIzaSyAkRl7PNxZHQIPiqCbmoTbOdLteKJ8DWwI",
+        authDomain: "servicehub-e6821.firebaseapp.com",
+        projectId: "servicehub-e6821",
+        storageBucket: "servicehub-e6821.firebasestorage.app",
+        messagingSenderId: "208780669426",
+        appId: "1:208780669426:web:3f141d0d6eecef1a397b6b",
+        measurementId: "G-4L17GBWVV0"
+      };
+
+      const app = initializeApp(firebaseConfig);
+      const db = getFirestore(app);
+
+      // ВСТАВЬ СВОЙ TELEGRAM USER ID ЗДЕСЬ (узнай через @userinfobot)
+      const ADMIN_IDS = [935754023]; // Твои админ-ID
+
+      const App = {
+        user: null,
+        currentTab: 'subscriptions',
+        pendingRequest: null,
+        subscriptions: [],
+        db
+      };
+
+      App.initTelegram = () => {
+        if (!window.Telegram?.WebApp) {
+          App.showToast('Открывайте через Telegram');
+          return;
+        }
+        Telegram.WebApp.ready();
+        Telegram.WebApp.expand();
+
+        const tp = Telegram.WebApp.themeParams;
+        if (tp) {
+          const root = document.documentElement;
+          Object.keys(tp).forEach(key => {
+            root.style.setProperty(`--${key.replace(/_/g, '-')}`, tp[key]);
+          });
+        }
+      };
+
+      App.showToast = (msg) => {
+        const t = document.getElementById('toast');
+        t.textContent = msg;
+        t.classList.add('visible');
+        setTimeout(() => t.classList.remove('visible'), 3000);
+      };
+
+      App.haptic = (type = 'light') => {
+        if (Telegram?.WebApp?.isVersionAtLeast?.('6.1')) {
+          Telegram.WebApp.HapticFeedback.impactOccurred(type);
+        }
+      };
+
+      // АВТОЛОГИН
+      App.autoLogin = async () => {
+        const tgUser = Telegram.WebApp.initDataUnsafe.user;
+        if (!tgUser || !tgUser.id) {
+          App.showToast('Не удалось получить данные пользователя');
+          return;
+        }
+
+        const userId = tgUser.id.toString();
+        const username = tgUser.username || tgUser.first_name || 'User';
+        const role = ADMIN_IDS.includes(tgUser.id) ? 'admin' : 'user';
+
+        // Сохраняем/обновляем пользователя
+        await setDoc(doc(db, "users", userId), {
+          username,
+          role,
+          telegramId: tgUser.id,
+          lastLogin: serverTimestamp()
+        }, { merge: true });
+
+        App.user = { id: userId, username, role, telegramId: tgUser.id };
+        document.getElementById('admin-tab').style.display = role === 'admin' ? 'flex' : 'none';
+        document.querySelector('.bottom-nav').style.display = 'flex';
+
+        App.loadUserData();
+        App.renderCurrentTab();
+        App.haptic('success');
+      };
+
+      App.loadUserData = () => {
+        onSnapshot(query(collection(db, "subscriptions"), where("userId", "==", App.user.id)), (snap) => {
+          App.subscriptions = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+          App.renderCurrentTab();
+        });
+
+        onSnapshot(query(collection(db, "paymentRequests"), where("userId", "==", App.user.id), where("status", "==", "pending")), (snap) => {
+          App.pendingRequest = snap.empty ? null : { id: snap.docs[0].id, ...snap.docs[0].data() };
+          document.getElementById('status-badge').style.display = App.pendingRequest ? 'block' : 'none';
+          App.renderCurrentTab();
+        });
+      };
+
+      App.renderCurrentTab = () => {
+        const content = document.getElementById('content');
+        const title = document.getElementById('page-title');
+        content.innerHTML = '';
+        title.textContent = '';
+
+        if (App.currentTab === 'subscriptions') {
+          title.textContent = 'Мои подписки';
+          if (App.subscriptions.length === 0) {
+            content.innerHTML = '<p class="caption text-center">Нет активных подписок. Оформите новую!</p>';
+          } else {
+            App.subscriptions.forEach(sub => {
+              const card = document.createElement('div');
+              card.className = 'card';
+              card.innerHTML = `
+                <h3>${sub.planName || 'Премиум подписка'}</h3>
+                <p><strong>Статус:</strong> Активна</p>
+                ${sub.connectionLink ? `<p class="caption">Ссылка:<br><span style="word-break:break-all;font-size:13px;">${sub.connectionLink}</span></p>` : ''}
+                ${sub.qrBase64 ? `<img src="${sub.qrBase64}" alt="QR-код" style="width:100%; border-radius:16px; margin:16px 0;">` : ''}
+                ${sub.connectionLink ? `<button class="btn btn-secondary" style="margin-top:12px;" onclick="navigator.clipboard.writeText('${sub.connectionLink}').then(()=>App.showToast('Скопировано!'))">Скопировать ссылку</button>` : ''}
+              `;
+              content.appendChild(card);
+            });
+          }
+
+        } else if (App.currentTab === 'purchase') {
+          title.textContent = 'Оформление подписки';
+          content.innerHTML = `
+            <div class="card">
+              <h3>Премиум — 499 ₽ / месяц</h3>
+              <p class="caption">Оплата через СБП</p>
+              <p style="margin:16px 0; word-break:break-all;">Реквизиты: [ТВОИ РЕКВИЗИТЫ]</p>
+              <button class="btn" id="paid-btn">${App.pendingRequest ? 'Заявка отправлена — ожидание' : 'Я оплатил'}</button>
+            </div>
+          `;
+          document.getElementById('paid-btn').onclick = App.onPaidClick;
+
+        } else if (App.currentTab === 'tutorial') {
+          title.textContent = 'Как подключиться';
+          content.innerHTML = `
+            <div class="card"><h3>1. Скачайте v2RayTun</h3><p>iOS: App Store<br>Android: Google Play</p></div>
+            <div class="card"><h3>2. Скопируйте ссылку</h3><p>Из раздела "Мои подписки"</p></div>
+            <div class="card"><h3>3. Вставьте в приложение</h3><p>Или отсканируйте QR-код</p></div>
+          `;
+
+        } else if (App.currentTab === 'admin') {
+          if (!App.user || App.user.role !== 'admin') {
+            title.textContent = 'Доступ запрещён';
+            content.innerHTML = '<p class="caption text-center">Только для администратора</p>';
+            return;
+          }
+          title.textContent = 'Админ-панель';
+          content.innerHTML = '<p class="caption">Загрузка заявок...</p>';
+          App.renderAdminPanel();
+        }
+      };
+
+      App.renderAdminPanel = async () => {
+        const content = document.getElementById('content');
+        content.innerHTML = '<h3>Ожидающие заявки</h3>';
+
+        const snap = await getDocs(query(collection(db, "paymentRequests"), where("status", "==", "pending")));
+        if (snap.empty) {
+          content.innerHTML += '<p class="caption">Нет заявок на подтверждение</p>';
+          return;
+        }
+
+        snap.forEach(d => {
+          const req = { id: d.id, ...d.data() };
+          const card = document.createElement('div');
+          card.className = 'card';
+          card.innerHTML = `
+            <p><strong>Пользователь:</strong> ${req.username || req.userId}</p>
+            <p><strong>Время:</strong> ${req.createdAt?.toDate()?.toLocaleString() || 'недавно'}</p>
+            <input type="text" placeholder="Ссылка подписки" id="link-${req.id}" style="margin-bottom:8px;">
+            <input type="file" accept="image/*" id="qr-${req.id}" style="margin-bottom:8px;">
+            <div id="preview-${req.id}" style="margin:16px 0;"></div>
+            <button class="btn" onclick="App.confirmPayment('${req.id}')">Подтвердить и выдать</button>
+          `;
+          content.appendChild(card);
+
+          document.getElementById(`qr-${req.id}`).onchange = (e) => {
+            const file = e.target.files[0];
+            if (file) {
+              const reader = new FileReader();
+              reader.onload = (ev) => {
+                document.getElementById(`preview-${req.id}`).innerHTML = `<img src="${ev.target.result}" style="width:100%; border-radius:16px;">`;
+              };
+              reader.readAsDataURL(file);
+            }
+          };
+        });
+      };
+
+      App.onPaidClick = async () => {
+        if (App.pendingRequest) {
+          App.showToast('Заявка уже отправлена');
+          return;
+        }
+
+        const ref = doc(collection(db, "paymentRequests"));
+        await setDoc(ref, {
+          userId: App.user.id,
+          username: App.user.username,
+          status: 'pending',
+          createdAt: serverTimestamp()
+        });
+
+        App.showToast('Заявка отправлена! Ожидайте подтверждения администратора');
+      };
+
+      window.App = App;
+
+      App.confirmPayment = async (requestId) => {
+        const linkInput = document.getElementById(`link-${requestId}`);
+        const qrInput = document.getElementById(`qr-${requestId}`);
+
+        const link = linkInput.value.trim();
+        let qrBase64 = '';
+
+        if (qrInput.files[0]) {
+          qrBase64 = await new Promise((resolve) => {
+            const reader = new FileReader();
+            reader.onload = (e) => resolve(e.target.result);
+            reader.readAsDataURL(qrInput.files[0]);
+          });
+        }
+
+        if (!link && !qrBase64) {
+          App.showToast('Введите ссылку или загрузите QR');
+          return;
+        }
+
+        const reqSnap = await getDoc(doc(db, "paymentRequests", requestId));
+        if (!reqSnap.exists()) {
+          App.showToast('Заявка не найдена');
+          return;
+        }
+        const userId = reqSnap.data().userId;
+
+        await setDoc(doc(collection(db, "subscriptions")), {
+          userId,
+          planName: 'Премиум',
+          status: 'active',
+          connectionLink: link,
+          qrBase64: qrBase64,
+          createdAt: serverTimestamp()
+        });
+
+        await updateDoc(doc(db, "paymentRequests", requestId), { status: 'confirmed' });
+
+        App.showToast('Подписка выдана! Пользователь увидит её автоматически');
+        linkInput.value = '';
+        qrInput.value = '';
+        document.getElementById(`preview-${requestId}`).innerHTML = '';
+        App.renderAdminPanel(); // Обновляем список заявок
+      };
+
+      // Навигация
+      document.querySelectorAll('.nav-item').forEach(item => {
+        item.addEventListener('click', (e) => {
+          document.querySelector('.nav-item.active')?.classList.remove('active');
+          e.currentTarget.classList.add('active');
+          App.currentTab = e.currentTarget.dataset.tab;
+          App.renderCurrentTab();
+          App.haptic('selection');
+        });
+      });
+
+      window.App = App;
+
+      App.initTelegram();
+      App.autoLogin();
+
+      document.getElementById('login-btn').addEventListener('click', () => {
+        const u = document.getElementById('username').value.trim();
+        const p = document.getElementById('password').value;
+        if (u && p) App.login(u, p);
+      });
+
+      App.showScreen = (screen) => {
+        const loginScreen = document.getElementById('login-screen');
+        const mainApp = document.getElementById('main-app');
+        const bottomNav = document.querySelector('.bottom-nav');
+
+        if (screen === 'login') {
+          loginScreen.classList.remove('hidden');
+          mainApp.classList.add('hidden');
+          bottomNav.style.display = 'none'; // Скрываем навигацию на логине
+        } else {
+          loginScreen.classList.add('hidden');
+          mainApp.classList.remove('hidden');
+          bottomNav.style.display = 'flex'; // Показываем после входа
+        }
+      };
+
+      App.initTelegram();
+      App.showScreen('login');
+    </script>
+
+    <style>
+      :root { --bg-color:#000; --text-color:#fff; --hint-color:#8e8e93; --link-color:#0a84ff; --button-color:#0a84ff; --button-text-color:#fff; --secondary-bg-color:#1c1c1e; --radius-l:20px; --radius-m:16px; --spacing-l:24px; --spacing-base:16px; }
+      *{margin:0;padding:0;box-sizing:border-box;}
+      body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:var(--bg-color);color:var(--text-color);min-height:100vh;position:fixed;width:100%;overflow:hidden;}
+      .container{padding:var(--spacing-l);padding-bottom:80px;}
+      .card{background:var(--secondary-bg-color);border-radius:var(--radius-l);padding:var(--spacing-l);margin-bottom:var(--spacing-base);}
+      .btn{background:var(--button-color);color:var(--button-text-color);border:none;border-radius:var(--radius-m);padding:16px;font-size:17px;font-weight:600;width:100%;cursor:pointer;}
+      .btn-secondary{background:rgba(255,255,255,0.1);}
+      input{margin-bottom:var(--spacing-base);width:100%;padding:16px;border-radius:var(--radius-m);border:none;background:rgba(255,255,255,0.1);color:var(--text-color);font-size:17px;}
+      .bottom-nav{position:fixed;bottom:0;left:0;right:0;background:rgba(0,0,0,0.85);backdrop-filter:blur(20px);padding:8px 16px env(safe-area-inset-bottom);display:none;justify-content:space-around;border-top:1px solid rgba(255,255,255,0.05);z-index:100;}
+      .nav-item{text-align:center;color:var(--hint-color);font-size:10px;padding:8px;border-radius:var(--radius-m);flex:1;}
+      .nav-item.active{color:var(--link-color);background:rgba(10,132,255,0.15);}
+      .nav-item svg{width:24px;height:24px;display:block;margin:0 auto 4px;}
+      #toast{position:fixed;bottom:100px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,0.8);color:white;padding:12px 24px;border-radius:30px;opacity:0;transition:opacity .3s;z-index:300;}
+      #toast.visible{opacity:1;}
+      #status-badge{display:none;position:fixed;top:16px;right:16px;background:#ff9f0a;color:#000;padding:8px 16px;border-radius:20px;font-weight:600;z-index:90;}
+      .hidden{display:none!important;}
+      h3{font-size:18px;margin-bottom:8px;}
+      .caption{font-size:14px;opacity:0.7;}
+    </style>
+</head>
+<body>
+  <div id="login-screen" class="container" style="display:flex;align-items:center;justify-content:center;min-height:100vh;">
+    <div style="width:100%;max-width:360px;">
+      <h1 style="text-align:center;margin-bottom:32px;">Remnawave</h1>
+      <div class="card">
+        <input type="text" id="username" placeholder="Логин">
+        <input type="password" id="password" placeholder="Пароль">
+        <button class="btn" id="login-btn">Войти</button>
+        <p class="caption" style="text-align:center;margin-top:16px;">Тест: admin / 123<br>user1 / 123</p>
+      </div>
+    </div>
+  </div>
+
+  <body>
+    <div id="main-app">
+      <div id="status-badge">Ожидание подтверждения...</div>
+      <div class="container">
+        <h2 id="page-title">Загрузка...</h2>
+        <div id="content"><p class="caption text-center">Авторизация...</p></div>
+      </div>
+    </div>
+
+  <nav class="bottom-nav">
+    <div class="nav-item active" data-tab="subscriptions"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg><div>Подписки</div></div>
+    <div class="nav-item" data-tab="purchase"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z"/></svg><div>Оформить</div></div>
+    <div class="nav-item" data-tab="tutorial"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/></svg><div>Обучение</div></div>
+    <div class="nav-item" data-tab="admin" id="admin-tab" style="display:none;"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"/></svg><div>Админ</div></div>
+  </nav>
+
+  <div id="toast"></div>
+</body>
+</html>
