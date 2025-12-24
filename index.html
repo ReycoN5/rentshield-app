@@ -7,7 +7,7 @@
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <script type="module">
       import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
-      import { getFirestore, collection, doc, setDoc, onSnapshot, updateDoc, query, where, getDocs, orderBy, serverTimestamp, addDoc } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+      import { getFirestore, collection, doc, setDoc, onSnapshot, updateDoc, query, where, getDocs, orderBy, serverTimestamp, addDoc, getDoc, Timestamp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 
       const firebaseConfig = {
         apiKey: "AIzaSyAkRl7PNxZHQIPiqCbmoTbOdLteKJ8DWwI",
@@ -24,12 +24,12 @@
       const ADMIN_IDS = [935754023];
 
       const PLANS = [
-        { id: 'month1', name: '1 месяц', price: 300, duration: '30 дней' },
-        { id: 'month3', name: '3 месяца', price: 800, duration: '90 дней' },
-        { id: 'month6', name: '6 месяцев', price: 1200, duration: '180 дней' }
+        { id: 'month1', name: '1 месяц', price: 300, duration: '30 дней', days: 30 },
+        { id: 'month3', name: '3 месяца', price: 800, duration: '90 дней', days: 90 },
+        { id: 'month6', name: '6 месяцев', price: 1200, duration: '180 дней', days: 180 }
       ];
 
-      const PHONE_NUMBER = "+7 (951) 609-86-41"; // Замени на свой
+      const PHONE_NUMBER = "+7 (951) 609-86-41"; 
 
       const App = {
         user: null,
@@ -41,6 +41,9 @@
         adminPayments: [],
         adminTickets: [],
         adminSearch: '',
+        currentAdminRequestId: null,
+        currentAdminRequestUserId: null,
+        currentAdminRequestDuration: 30,
         db
       };
 
@@ -86,7 +89,6 @@
         const username = tgUser.username || tgUser.first_name || 'User';
         const role = ADMIN_IDS.includes(tgUser.id) ? 'admin' : 'user';
         
-        // Display User ID immediately
         document.getElementById('user-id-display').textContent = `ID: ${userId}`;
 
         await setDoc(doc(db, "users", userId), { username, role, telegramId: tgUser.id, lastLogin: serverTimestamp() }, { merge: true });
@@ -106,25 +108,29 @@
       };
 
       App.loadUserData = () => {
+        // Load Active Subscriptions
         onSnapshot(query(collection(db, "subscriptions"), where("userId", "==", App.user.id)), (snap) => {
           App.subscriptions = snap.docs.map(d => ({ id: d.id, ...d.data() }));
           if (App.currentTab === 'subscriptions') App.renderCurrentTab();
         });
         
-        onSnapshot(query(collection(db, "paymentRequests"), where("userId", "==", App.user.id), where("status", "==", "pending")), (snap) => {
-          App.pendingRequest = snap.empty ? null : { id: snap.docs[0].id, ...snap.docs[0].data() };
+        // Load Requests (Pending or recently updated)
+        onSnapshot(query(collection(db, "paymentRequests"), where("userId", "==", App.user.id), orderBy("createdAt", "desc")), (snap) => {
+          // Find the most recent pending request
+          const pending = snap.docs.find(d => d.data().status === 'pending');
+          App.pendingRequest = pending ? { id: pending.id, ...pending.data() } : null;
+          
           document.getElementById('status-badge').classList.toggle('show', !!App.pendingRequest);
           if (App.currentTab === 'subscriptions') App.renderCurrentTab();
         });
         
-        // Load messages for chat (sorted ASC for chat flow)
+        // Load tickets
         onSnapshot(query(collection(db, "supportTickets"), where("userId", "==", App.user.id), orderBy("createdAt", "asc")), (snap) => {
           App.tickets = snap.docs.map(d => ({ id: d.id, ...d.data() }));
           if (App.currentTab === 'support') App.renderCurrentTab();
         });
       };
       
-      // Admin Real-time Listeners
       App.initAdminListeners = () => {
           onSnapshot(query(collection(db, "paymentRequests"), where("status", "==", "pending")), (snap) => {
               App.adminPayments = snap.docs.map(d => ({ id: d.id, ...d.data() }));
@@ -154,15 +160,13 @@
 
       App.confirmPayment = async () => {
         if (App.pendingRequest) {
-          App.showToast('Заявка уже отправлена');
+          App.showToast('У вас уже есть активная заявка');
           document.getElementById('payment-modal').classList.remove('show');
           return;
         }
         
-        // Optimistic UI Update
         document.getElementById('payment-modal').classList.remove('show');
         App.showToast('Обработка заявки...');
-        document.getElementById('status-badge').classList.add('show');
         
         try {
             const ref = doc(collection(db, "paymentRequests"));
@@ -172,6 +176,7 @@
               planId: App.selectedPlan.id,
               planName: App.selectedPlan.name,
               price: App.selectedPlan.price,
+              duration: App.selectedPlan.days, // Save duration for expiry calc
               status: 'pending',
               createdAt: serverTimestamp()
             });
@@ -179,7 +184,6 @@
         } catch (e) {
             console.error(e);
             App.showToast('Ошибка создания заявки');
-            document.getElementById('status-badge').classList.remove('show');
         }
       };
 
@@ -196,7 +200,7 @@
                 userId: App.user.id,
                 username: App.user.username,
                 message: message,
-                sender: 'user', // Explicit sender
+                sender: 'user',
                 status: 'open',
                 createdAt: serverTimestamp()
             });
@@ -207,13 +211,12 @@
         }
       };
 
-      // Admin Chat Reply
       App.adminReplyToUser = async (targetUserId, message) => {
           if(!message.trim()) return;
           try {
              await addDoc(collection(db, "supportTickets"), {
                 userId: targetUserId,
-                username: 'Admin', // Placeholder
+                username: 'Admin',
                 message: message,
                 sender: 'admin',
                 status: 'answered',
@@ -231,57 +234,167 @@
           App.renderAdminPanel();
       };
 
-      // Admin confirm payment Logic
-      App.adminConfirmPayment = async (id, userId, link, qrBase64) => {
-          if (!link && !qrBase64) return App.showToast('Добавьте ссылку или QR');
+      // --- Admin Modal Logic ---
+      App.openAdminConfirmModal = (requestId, userId, duration) => {
+          App.currentAdminRequestId = requestId;
+          App.currentAdminRequestUserId = userId;
+          App.currentAdminRequestDuration = duration || 30;
           
-          await setDoc(doc(collection(db, "subscriptions")), {
-              userId: userId,
-              planName: 'Премиум',
-              status: 'active',
-              connectionLink: link,
-              qrBase64,
-              createdAt: serverTimestamp()
-            });
-            await updateDoc(doc(db, "paymentRequests", id), { status: 'confirmed' });
-            App.showToast('Подписка выдана');
+          document.getElementById('admin-link-input').value = '';
+          document.getElementById('admin-qr-input').value = '';
+          document.getElementById('admin-qr-preview').innerHTML = '';
+          document.getElementById('admin-confirm-modal').classList.add('show');
+      };
+
+      App.closeAdminModal = () => {
+          document.getElementById('admin-confirm-modal').classList.remove('show');
+          App.currentAdminRequestId = null;
+      };
+
+      App.previewAdminQr = (event) => {
+          const file = event.target.files[0];
+          if (file) {
+              const reader = new FileReader();
+              reader.onload = ev => {
+                  document.getElementById('admin-qr-preview').innerHTML = `<img src="${ev.target.result}" class="qr-preview">`;
+              };
+              reader.readAsDataURL(file);
+          }
+      };
+
+      App.finalizeAdminConfirm = async () => {
+          const link = document.getElementById('admin-link-input').value.trim();
+          const qrFile = document.getElementById('admin-qr-input').files[0];
+          
+          if (!link && !qrFile) return App.showToast('Добавьте ссылку или QR');
+
+          let qrBase64 = '';
+          if (qrFile) {
+              qrBase64 = await new Promise(r => {
+                const reader = new FileReader();
+                reader.onload = e => r(e.target.result);
+                reader.readAsDataURL(qrFile);
+              });
+          }
+
+          // Calculate Expiration
+          const now = new Date();
+          const expiresAt = new Date(now.setDate(now.getDate() + App.currentAdminRequestDuration));
+
+          try {
+              // Create Subscription
+              await addDoc(collection(db, "subscriptions"), {
+                  userId: App.currentAdminRequestUserId,
+                  planName: 'Премиум', // Or dynamic name from request
+                  status: 'active',
+                  connectionLink: link,
+                  qrBase64,
+                  expiresAt: Timestamp.fromDate(expiresAt),
+                  createdAt: serverTimestamp()
+              });
+              
+              // Update Request Status
+              await updateDoc(doc(db, "paymentRequests", App.currentAdminRequestId), { status: 'confirmed' });
+              
+              App.showToast('Подписка выдана');
+              App.closeAdminModal();
+          } catch(e) {
+              console.error(e);
+              App.showToast('Ошибка сохранения');
+          }
+      };
+
+      App.rejectPayment = async (requestId) => {
+          if(!confirm('Отклонить эту заявку?')) return;
+          try {
+              await updateDoc(doc(db, "paymentRequests", requestId), { status: 'rejected' });
+              App.showToast('Заявка отклонена');
+          } catch(e) {
+              console.error(e);
+              App.showToast('Ошибка');
+          }
+      };
+
+      App.toggleSubscriptionDetails = (element) => {
+          element.classList.toggle('expanded');
+          App.haptic('light');
       };
 
       App.renderCurrentTab = () => {
         const content = document.getElementById('content');
         const headerTitle = document.getElementById('header-title');
         
-        // Clear content logic handled per tab to avoid full flicker if possible, 
-        // but sticking to simple re-render for consistency
         content.innerHTML = '';
 
         if (App.currentTab === 'subscriptions') {
           headerTitle.textContent = 'Мои подписки';
-          if (App.subscriptions.length === 0) {
-            content.innerHTML = `
+          
+          // Show Pending Request Card
+          if (App.pendingRequest) {
+              const pendingCard = document.createElement('div');
+              pendingCard.className = 'card fade-in';
+              pendingCard.style.border = '1px solid #ff9f0a';
+              pendingCard.innerHTML = `
+                <div class="card-header">
+                    <h3>Заявка на оплату</h3>
+                    <span class="status neutral" style="color:#ff9f0a; background: rgba(255,159,10,0.1)">Ожидает</span>
+                </div>
+                <p class="hint">Тариф: ${App.pendingRequest.planName} (${App.pendingRequest.price}₽)</p>
+                <p class="hint" style="font-size:12px; margin-top:8px;">Мы проверяем ваш платеж. Обычно это занимает 5-15 минут.</p>
+              `;
+              content.appendChild(pendingCard);
+          }
+
+          if (App.subscriptions.length === 0 && !App.pendingRequest) {
+            content.innerHTML += `
                 <div class="empty-state fade-in">
                     <div class="icon-box">🔍</div>
-                    <p class="hint">У вас пока нет активных подписок</p>
+                    <p class="hint">У вас нет активных подписок</p>
                     <button class="btn primary" onclick="document.querySelector('[data-tab=purchase]').click()">Оформить подписку</button>
                 </div>`;
           } else {
             App.subscriptions.forEach(sub => {
+              // Calculate days left
+              let daysLeft = '∞';
+              let isExpired = false;
+              if (sub.expiresAt) {
+                  const now = new Date();
+                  const exp = sub.expiresAt.toDate();
+                  const diff = Math.ceil((exp - now) / (1000 * 60 * 60 * 24));
+                  daysLeft = diff > 0 ? diff : 0;
+                  isExpired = diff <= 0;
+              }
+
               const card = document.createElement('div');
               card.className = 'card subscription-card fade-in';
+              card.onclick = (e) => {
+                  if(!e.target.closest('button')) App.toggleSubscriptionDetails(card);
+              };
+              
               card.innerHTML = `
                 <div class="card-header">
-                    <h3>${sub.planName}</h3>
-                    <span class="status active">Активна</span>
+                    <div>
+                        <h3>${sub.planName}</h3>
+                        <p style="font-size:13px; color:var(--tg-theme-hint-color); margin-top:4px;">
+                           ${isExpired ? 'Истекла' : `Осталось дней: ${daysLeft}`}
+                        </p>
+                    </div>
+                    <span class="status ${isExpired ? 'closed' : 'active'}">${isExpired ? 'Неактивна' : 'Активна'}</span>
                 </div>
-                ${sub.connectionLink ? `
-                    <div class="link-container">
-                        <div class="link-label">Ссылка подключения</div>
-                        <p class="link text-truncate">${sub.connectionLink}</p>
-                    </div>` : ''}
-                ${sub.qrBase64 ? `<div class="qr-container"><img src="${sub.qrBase64}" class="qr"></div>` : ''}
-                <div class="card-actions">
-                    ${sub.connectionLink ? `<button class="btn secondary" onclick="navigator.clipboard.writeText('${sub.connectionLink}'); App.showToast('Скопировано')">Скопировать ключ</button>` : ''}
+                
+                <div class="sub-details">
+                    <div style="height:1px; background:rgba(255,255,255,0.1); margin: 12px 0;"></div>
+                    ${sub.connectionLink ? `
+                        <div class="link-container">
+                            <div class="link-label">Ссылка подключения</div>
+                            <p class="link text-truncate">${sub.connectionLink}</p>
+                        </div>` : ''}
+                    ${sub.qrBase64 ? `<div class="qr-container"><img src="${sub.qrBase64}" class="qr"></div>` : ''}
+                    <div class="card-actions">
+                        ${sub.connectionLink ? `<button class="btn secondary" onclick="navigator.clipboard.writeText('${sub.connectionLink}'); App.showToast('Скопировано')">Скопировать ключ</button>` : ''}
+                    </div>
                 </div>
+                <div class="click-hint">Нажмите, чтобы открыть данные</div>
               `;
               content.appendChild(card);
             });
@@ -345,7 +458,6 @@
                chatContainer.innerHTML = '<div class="empty-state"><p class="hint">Напишите нам, мы поможем!</p></div>';
            } else {
                App.tickets.forEach(msg => {
-                   // Handle legacy tickets (adminReply)
                    const msgEl = document.createElement('div');
                    const isUser = msg.sender !== 'admin';
                    msgEl.className = `chat-bubble ${isUser ? 'user' : 'admin'}`;
@@ -361,12 +473,10 @@
                });
            }
            
-           // Scroll to bottom
            setTimeout(() => chatContainer.scrollTop = chatContainer.scrollHeight, 100);
 
            content.appendChild(chatContainer);
 
-           // Input Area
            const inputArea = document.createElement('div');
            inputArea.className = 'chat-input-area';
            inputArea.innerHTML = `
@@ -377,7 +487,6 @@
            `;
            content.appendChild(inputArea);
            
-           // Handle Enter key
            setTimeout(() => {
               document.getElementById('ticket-message').addEventListener('keypress', (e) => {
                   if(e.key === 'Enter') App.submitTicket();
@@ -395,7 +504,6 @@
         const content = document.getElementById('content');
         content.innerHTML = '';
         
-        // Search Bar
         const searchContainer = document.createElement('div');
         searchContainer.className = 'admin-search-container';
         searchContainer.innerHTML = `
@@ -403,7 +511,6 @@
         `;
         content.appendChild(searchContainer);
         
-        // Filter Data
         const filter = (list) => {
             if(!App.adminSearch) return list;
             return list.filter(item => item.userId.toLowerCase().includes(App.adminSearch));
@@ -411,13 +518,11 @@
 
         const filteredPayments = filter(App.adminPayments);
         
-        // Group Tickets by User for Chat View
         const chats = {};
         App.adminTickets.forEach(t => {
             if (!chats[t.userId]) chats[t.userId] = { username: t.username, userId: t.userId, messages: [] };
             chats[t.userId].messages.push(t);
         });
-        // Filter chats by userId
         const filteredChatUserIds = Object.keys(chats).filter(uid => uid.toLowerCase().includes(App.adminSearch));
 
         // --- Payments Section ---
@@ -441,47 +546,14 @@
                     <div class="date-badge">${req.createdAt?.toDate()?.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) || 'Now'}</div>
                 </div>
                 <div class="admin-body">
-                    <p class="hint" style="margin-bottom:8px;">План: ${req.planName} (${req.price}₽)</p>
-                    <div class="input-group">
-                        <input type="text" placeholder="Вставьте vless:// ссылку" id="link-${req.id}" class="styled-input">
+                    <p class="hint" style="margin-bottom:12px;">План: <b>${req.planName}</b> (${req.price}₽)</p>
+                    <div style="display:flex; gap: 8px;">
+                        <button class="btn primary small" onclick="App.openAdminConfirmModal('${req.id}', '${req.userId}', ${req.duration || 30})">Подтвердить</button>
+                        <button class="btn secondary small" onclick="App.rejectPayment('${req.id}')" style="color: #ff3b30; background: rgba(255, 59, 48, 0.1)">Отклонить</button>
                     </div>
-                    <div class="file-group">
-                        <label for="qr-${req.id}" class="file-label">
-                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline></svg>
-                            Загрузить QR
-                        </label>
-                        <input type="file" accept="image/*" id="qr-${req.id}" class="hidden-input">
-                    </div>
-                    <div id="preview-${req.id}" class="preview-area"></div>
                 </div>
-                <button class="btn primary small" id="confirm-btn-${req.id}">Подтвердить</button>
               `;
               content.appendChild(card);
-              
-              // Event Listeners for file preview
-              const fileInput = document.getElementById(`qr-${req.id}`);
-              fileInput.onchange = e => {
-                const file = e.target.files[0];
-                if (file) {
-                  const reader = new FileReader();
-                  reader.onload = ev => document.getElementById(`preview-${req.id}`).innerHTML = `<img src="${ev.target.result}" class="qr-preview">`;
-                  reader.readAsDataURL(file);
-                }
-              };
-              
-              document.getElementById(`confirm-btn-${req.id}`).onclick = async () => {
-                  const link = document.getElementById(`link-${req.id}`).value.trim();
-                  const qrFile = document.getElementById(`qr-${req.id}`).files[0];
-                  let qrBase64 = '';
-                  if (qrFile) {
-                      qrBase64 = await new Promise(r => {
-                        const reader = new FileReader();
-                        reader.onload = e => r(e.target.result);
-                        reader.readAsDataURL(qrFile);
-                      });
-                  }
-                  App.adminConfirmPayment(req.id, req.userId, link, qrBase64);
-              };
             });
         }
 
@@ -494,8 +566,6 @@
 
         filteredChatUserIds.forEach(userId => {
             const chat = chats[userId];
-            // Sort messages desc (newest first) for preview, but we want to show chat history
-            // Actually App.adminTickets is sorted desc. So chat.messages[0] is the latest.
             const lastMsg = chat.messages[0];
             
             const chatCard = document.createElement('div');
@@ -553,6 +623,13 @@
             if(e.target.id === 'payment-modal') {
                 e.target.classList.remove('show');
             }
+        });
+
+        // Admin Modal Close on Click Outside
+        document.getElementById('admin-confirm-modal').addEventListener('click', (e) => {
+             if(e.target.id === 'admin-confirm-modal') {
+                 App.closeAdminModal();
+             }
         });
 
         App.initTelegram();
@@ -658,9 +735,15 @@
       .plan-info .duration { font-size: 14px; color: var(--tg-theme-hint-color); }
       .plan-price { font-size: 17px; font-weight: 600; color: var(--tg-theme-button-color); display: flex; align-items: center; gap: 8px; }
 
-      .subscription-card { border: 1px solid rgba(255,255,255,0.05); }
-      .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+      .subscription-card { border: 1px solid rgba(255,255,255,0.05); cursor: pointer; transition: transform 0.1s; }
+      .subscription-card:active { transform: scale(0.98); }
+      .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0; }
       .card-header h3 { font-size: 20px; font-weight: 700; }
+      
+      .sub-details { max-height: 0; overflow: hidden; transition: max-height 0.3s ease-out; opacity: 0; }
+      .subscription-card.expanded .sub-details { max-height: 500px; opacity: 1; margin-top: 8px; }
+      .subscription-card.expanded .click-hint { display: none; }
+      .click-hint { font-size: 11px; text-align: center; color: var(--tg-theme-hint-color); margin-top: 12px; opacity: 0.6; }
 
       .status { font-size: 12px; padding: 4px 10px; border-radius: 100px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
       .status.active { background: rgba(52, 199, 89, 0.2); color: #32d74b; }
@@ -786,6 +869,31 @@
         <button class="btn primary" onclick="App.confirmPayment()">
             Я оплатил
         </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Admin Confirmation Modal -->
+  <div id="admin-confirm-modal" class="modal">
+    <div class="modal-content">
+      <div class="modal-drag"></div>
+      <h3>Выдача подписки</h3>
+      <p class="hint" style="margin-bottom:20px;">Заполните данные для пользователя</p>
+      
+      <input type="text" placeholder="Ссылка (vless://...)" id="admin-link-input" class="styled-input">
+      
+      <div class="file-group">
+        <label for="admin-qr-input" class="file-label">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline></svg>
+            Загрузить QR
+        </label>
+        <input type="file" accept="image/*" id="admin-qr-input" class="hidden-input" onchange="App.previewAdminQr(event)">
+      </div>
+      <div id="admin-qr-preview" class="preview-area" style="text-align:center; margin-bottom:16px;"></div>
+
+      <div style="display: flex; gap: 12px;">
+        <button class="btn secondary" onclick="App.closeAdminModal()">Отмена</button>
+        <button class="btn primary" onclick="App.finalizeAdminConfirm()">Выдать</button>
       </div>
     </div>
   </div>
