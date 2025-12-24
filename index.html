@@ -8,18 +8,21 @@
     <script type="module">
       import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
       import { getFirestore, collection, doc, setDoc, onSnapshot, updateDoc, query, where, getDocs, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+
       const firebaseConfig = {
         apiKey: "AIzaSyAkRl7PNxZHQIPiqCbmoTbOdLteKJ8DWwI",
         authDomain: "servicehub-e6821.firebaseapp.com",
         projectId: "servicehub-e6821",
         storageBucket: "servicehub-e6821.firebasestorage.app",
         messagingSenderId: "208780669426",
-        appId: "1:208780669426:web:3f141d0d6eecef1a397b6b",
-        measurementId: "G-4L17GBWVV0"
+        appId: "1:208780669426:web:3f141d0d6eecef1a397b6b"
       };
+
       const app = initializeApp(firebaseConfig);
       const db = getFirestore(app);
-      const ADMIN_IDS = [935754023]; // Твой ID
+
+      const ADMIN_IDS = [935754023];
+
       const App = {
         user: null,
         currentTab: 'subscriptions',
@@ -27,60 +30,61 @@
         subscriptions: [],
         db
       };
+
       App.initTelegram = () => {
-        if (!window.Telegram?.WebApp) {
-          document.getElementById('content').innerHTML = '<p class="caption text-center">Открывайте через Telegram бот</p>';
-          return;
-        }
+        if (!window.Telegram?.WebApp) return;
         Telegram.WebApp.ready();
         Telegram.WebApp.expand();
+
         const tp = Telegram.WebApp.themeParams;
         if (tp) {
           const root = document.documentElement;
-          Object.keys(tp).forEach(key => root.style.setProperty(`--${key.replace(/_/g, '-')}`, tp[key]));
+          root.style.setProperty('--bg', tp.bg_color || '#000');
+          root.style.setProperty('--text', tp.text_color || '#fff');
+          root.style.setProperty('--hint', tp.hint_color || '#aaa');
+          root.style.setProperty('--link', tp.link_color || '#0a84ff');
+          root.style.setProperty('--button', tp.button_color || '#0a84ff');
+          root.style.setProperty('--button-text', tp.button_text_color || '#fff');
+          root.style.setProperty('--secondary-bg', tp.secondary_bg_color || '#111');
         }
       };
+
       App.showToast = (msg) => {
         const t = document.getElementById('toast');
         t.textContent = msg;
-        t.classList.add('visible');
-        setTimeout(() => t.classList.remove('visible'), 3000);
+        t.classList.add('show');
+        setTimeout(() => t.classList.remove('show'), 3000);
       };
+
       App.haptic = (type = 'light') => {
-        const validStyles = ['light', 'medium', 'heavy'];
-        if (validStyles.includes(type) && Telegram?.WebApp?.isVersionAtLeast?.('6.1')) {
+        if (Telegram?.WebApp?.isVersionAtLeast?.('6.1')) {
           Telegram.WebApp.HapticFeedback.impactOccurred(type);
         }
       };
+
       App.autoLogin = async () => {
         const tgUser = Telegram.WebApp.initDataUnsafe.user;
         if (!tgUser || !tgUser.id) {
-          document.getElementById('content').innerHTML = '<p class="caption text-center">Ошибка авторизации.<br>Откройте через кнопку в боте.</p>';
+          document.getElementById('content').innerHTML = '<p class="hint">Откройте через кнопку в боте</p>';
           return;
         }
+
         const userId = tgUser.id.toString();
         const username = tgUser.username || tgUser.first_name || 'User';
         const role = ADMIN_IDS.includes(tgUser.id) ? 'admin' : 'user';
-        try {
-          await setDoc(doc(db, "users", userId), {
-            username,
-            role,
-            telegramId: tgUser.id,
-            lastLogin: serverTimestamp()
-          }, { merge: true });
-        } catch (e) {
-          App.showToast('Ошибка соединения');
-          console.error(e);
-          return;
-        }
+
+        await setDoc(doc(db, "users", userId), { username, role, telegramId: tgUser.id, lastLogin: serverTimestamp() }, { merge: true });
+
         App.user = { id: userId, username, role };
         document.getElementById('admin-tab').style.display = role === 'admin' ? 'flex' : 'none';
-        document.querySelector('.bottom-nav').style.display = 'flex';
+        document.querySelector('.bottom-nav').classList.add('show');
+
         App.loadUserData();
         App.renderCurrentTab();
         App.haptic('light');
-        App.showToast(`Добро пожаловать, ${username}!`);
+        App.showToast(`Привет, ${username}`);
       };
+
       App.loadUserData = () => {
         onSnapshot(query(collection(db, "subscriptions"), where("userId", "==", App.user.id)), (snap) => {
           App.subscriptions = snap.docs.map(d => ({ id: d.id, ...d.data() }));
@@ -88,156 +92,132 @@
         });
         onSnapshot(query(collection(db, "paymentRequests"), where("userId", "==", App.user.id), where("status", "==", "pending")), (snap) => {
           App.pendingRequest = snap.empty ? null : { id: snap.docs[0].id, ...snap.docs[0].data() };
-          document.getElementById('status-badge').style.display = App.pendingRequest ? 'block' : 'none';
+          document.getElementById('status-badge').classList.toggle('show', !!App.pendingRequest);
           App.renderCurrentTab();
         });
       };
+
       App.renderCurrentTab = () => {
         const content = document.getElementById('content');
         const title = document.getElementById('page-title');
         content.innerHTML = '';
         title.textContent = '';
+
         if (App.currentTab === 'subscriptions') {
           title.textContent = 'Мои подписки';
           if (App.subscriptions.length === 0) {
-            content.innerHTML = '<p class="caption text-center">Нет активных подписок. Оформите новую!</p>';
+            content.innerHTML = '<p class="hint center">Нет активных подписок</p>';
           } else {
             App.subscriptions.forEach(sub => {
               const card = document.createElement('div');
-              card.className = 'card';
+              card.className = 'card fade-in';
               card.innerHTML = `
-                <h3>${sub.planName || 'Премиум подписка'}</h3>
-                <p><strong>Статус:</strong> Активна</p>
-                ${sub.connectionLink ? `<p class="caption">Ссылка:<br><span style="word-break:break-all;font-size:13px;">${sub.connectionLink}</span></p>` : ''}
-                ${sub.qrBase64 ? `<img src="${sub.qrBase64}" alt="QR-код" style="width:100%; border-radius:16px; margin:16px 0;">` : ''}
-                ${sub.connectionLink ? `<button class="btn btn-secondary" style="margin-top:12px;" onclick="navigator.clipboard.writeText('${sub.connectionLink}').then(()=>App.showToast('Скопировано!'))">Скопировать ссылку</button>` : ''}
+                <h3>${sub.planName || 'Премиум'}</h3>
+                <p class="status active">Активна</p>
+                ${sub.connectionLink ? `<p class="link">${sub.connectionLink}</p>` : ''}
+                ${sub.qrBase64 ? `<img src="${sub.qrBase64}" class="qr">` : ''}
+                ${sub.connectionLink ? `<button class="btn secondary" onclick="navigator.clipboard.writeText('${sub.connectionLink}'); App.showToast('Скопировано')">Скопировать</button>` : ''}
               `;
               content.appendChild(card);
             });
           }
         } else if (App.currentTab === 'purchase') {
-          title.textContent = 'Оформление подписки';
+          title.textContent = 'Оформление';
           content.innerHTML = `
-            <div class="card">
-              <h3>Премиум — 499 ₽ / месяц</h3>
-              <p class="caption">Оплата через СБП</p>
-              <p style="margin:16px 0; word-break:break-all;">Реквизиты: [ТВОИ РЕКВИЗИТЫ]</p>
-              <button class="btn" id="paid-btn">${App.pendingRequest ? 'Заявка отправлена — ожидание' : 'Я оплатил'}</button>
+            <div class="card fade-in">
+              <h3>Премиум</h3>
+              <p class="price">499 ₽ / месяц</p>
+              <p class="hint">Оплата через СБП</p>
+              <p class="details">Реквизиты:<br><span class="mono">[ВСТАВЬ СВОИ]</span></p>
+              <button class="btn primary" id="paid-btn">${App.pendingRequest ? 'Ожидание подтверждения' : 'Я оплатил'}</button>
             </div>
           `;
-          const paidBtn = document.getElementById('paid-btn');
-          if (paidBtn) {
-            paidBtn.addEventListener('click', App.onPaidClick);
-          }
+          const btn = document.getElementById('paid-btn');
+          if (btn) btn.addEventListener('click', App.onPaidClick);
         } else if (App.currentTab === 'tutorial') {
           title.textContent = 'Как подключиться';
           content.innerHTML = `
-            <div class="card"><h3>1. Скачайте v2RayTun</h3><p>iOS: App Store<br>Android: Google Play</p></div>
-            <div class="card"><h3>2. Скопируйте ссылку</h3><p>Из раздела "Мои подписки"</p></div>
-            <div class="card"><h3>3. Вставьте в приложение</h3><p>Или отсканируйте QR-код</p></div>
+            <div class="card fade-in"><h3>1. Скачайте приложение</h3><p>v2RayTun (iOS / Android)</p></div>
+            <div class="card fade-in"><h3>2. Скопируйте ссылку</h3><p>Из раздела "Мои подписки"</p></div>
+            <div class="card fade-in"><h3>3. Вставьте в приложение</h3><p>Или отсканируйте QR-код</p></div>
           `;
         } else if (App.currentTab === 'admin') {
-          if (!App.user || App.user.role !== 'admin') {
-            title.textContent = 'Доступ запрещён';
-            content.innerHTML = '<p class="caption text-center">Только для администратора</p>';
-            return;
-          }
-          title.textContent = 'Админ-панель';
-          content.innerHTML = '<p class="caption">Загрузка заявок...</p>';
+          if (App.user.role !== 'admin') return;
+          title.textContent = 'Админ';
+          content.innerHTML = '<p class="hint">Загрузка заявок...</p>';
           App.renderAdminPanel();
         }
       };
+
       App.renderAdminPanel = async () => {
         const content = document.getElementById('content');
-        content.innerHTML = '<h3>Ожидающие заявки</h3>';
+        content.innerHTML = '<h3 class="section-title">Заявки</h3>';
         const snap = await getDocs(query(collection(db, "paymentRequests"), where("status", "==", "pending")));
         if (snap.empty) {
-          content.innerHTML += '<p class="caption">Нет заявок на подтверждение</p>';
+          content.innerHTML += '<p class="hint center">Нет заявок</p>';
           return;
         }
         snap.forEach(d => {
           const req = { id: d.id, ...d.data() };
           const card = document.createElement('div');
-          card.className = 'card';
+          card.className = 'card fade-in';
           card.innerHTML = `
-            <p><strong>Пользователь:</strong> ${req.username || req.userId}</p>
-            <p><strong>Время:</strong> ${req.createdAt?.toDate()?.toLocaleString() || 'недавно'}</p>
-            <input type="text" placeholder="Ссылка подписки" id="link-${req.id}" style="margin-bottom:8px;">
-            <input type="file" accept="image/*" id="qr-${req.id}" style="margin-bottom:8px;">
-            <div id="preview-${req.id}" style="margin:16px 0;"></div>
-            <button class="btn" onclick="App.confirmPayment('${req.id}')">Подтвердить и выдать</button>
+            <p><strong>${req.username || req.userId}</strong></p>
+            <p class="hint">${req.createdAt?.toDate()?.toLocaleString() || 'Недавно'}</p>
+            <input type="text" placeholder="Ссылка" id="link-${req.id}">
+            <input type="file" accept="image/*" id="qr-${req.id}">
+            <div id="preview-${req.id}" class="preview"></div>
+            <button class="btn primary" onclick="App.confirmPayment('${req.id}')">Выдать</button>
           `;
           content.appendChild(card);
-          const qrInput = document.getElementById(`qr-${req.id}`);
-          if (qrInput) {
-            qrInput.onchange = (e) => {
-              const file = e.target.files[0];
-              if (file) {
-                const reader = new FileReader();
-                reader.onload = (ev) => {
-                  document.getElementById(`preview-${req.id}`).innerHTML = `<img src="${ev.target.result}" style="width:100%; border-radius:16px;">`;
-                };
-                reader.readAsDataURL(file);
-              }
-            };
-          }
+          document.getElementById(`qr-${req.id}`).onchange = e => {
+            const file = e.target.files[0];
+            if (file) {
+              const reader = new FileReader();
+              reader.onload = ev => document.getElementById(`preview-${req.id}`).innerHTML = `<img src="${ev.target.result}" class="qr">`;
+              reader.readAsDataURL(file);
+            }
+          };
         });
       };
+
       App.onPaidClick = async () => {
-        if (App.pendingRequest) {
-          App.showToast('Заявка уже отправлена');
-          return;
-        }
+        if (App.pendingRequest) return App.showToast('Заявка уже отправлена');
         const ref = doc(collection(db, "paymentRequests"));
-        await setDoc(ref, {
-          userId: App.user.id,
-          username: App.user.username,
-          status: 'pending',
-          createdAt: serverTimestamp()
-        });
-        App.showToast('Заявка отправлена! Ожидайте подтверждения администратора');
+        await setDoc(ref, { userId: App.user.id, username: App.user.username, status: 'pending', createdAt: serverTimestamp() });
+        App.showToast('Заявка отправлена');
       };
+
       window.App = App;
-      App.confirmPayment = async (requestId) => {
-        const linkInput = document.getElementById(`link-${requestId}`);
-        const qrInput = document.getElementById(`qr-${requestId}`);
-        const link = linkInput.value.trim();
+
+      App.confirmPayment = async (id) => {
+        const link = document.getElementById(`link-${id}`).value.trim();
+        const qrFile = document.getElementById(`qr-${id}`).files[0];
         let qrBase64 = '';
-        if (qrInput.files[0]) {
-          qrBase64 = await new Promise((resolve) => {
+        if (qrFile) {
+          qrBase64 = await new Promise(r => {
             const reader = new FileReader();
-            reader.onload = (e) => resolve(e.target.result);
-            reader.readAsDataURL(qrInput.files[0]);
+            reader.onload = e => r(e.target.result);
+            reader.readAsDataURL(qrFile);
           });
         }
-        if (!link && !qrBase64) {
-          App.showToast('Введите ссылку или загрузите QR');
-          return;
-        }
-        const reqSnap = await getDoc(doc(db, "paymentRequests", requestId));
-        if (!reqSnap.exists()) {
-          App.showToast('Заявка не найдена');
-          return;
-        }
-        const userId = reqSnap.data().userId;
+        if (!link && !qrBase64) return App.showToast('Добавьте ссылку или QR');
+        const req = await getDoc(doc(db, "paymentRequests", id));
         await setDoc(doc(collection(db, "subscriptions")), {
-          userId,
+          userId: req.data().userId,
           planName: 'Премиум',
           status: 'active',
           connectionLink: link,
-          qrBase64: qrBase64,
+          qrBase64,
           createdAt: serverTimestamp()
         });
-        await updateDoc(doc(db, "paymentRequests", requestId), { status: 'confirmed' });
-        App.showToast('Подписка выдана! Пользователь увидит её автоматически');
-        linkInput.value = '';
-        qrInput.value = '';
-        document.getElementById(`preview-${requestId}`).innerHTML = '';
-        App.renderAdminPanel(); // Обновляем список заявок
+        await updateDoc(doc(db, "paymentRequests", id), { status: 'confirmed' });
+        App.showToast('Подписка выдана');
+        App.renderAdminPanel();
       };
-      // Навигация
+
       document.querySelectorAll('.nav-item').forEach(item => {
-        item.addEventListener('click', (e) => {
+        item.addEventListener('click', e => {
           document.querySelector('.nav-item.active')?.classList.remove('active');
           e.currentTarget.classList.add('active');
           App.currentTab = e.currentTarget.dataset.tab;
@@ -245,25 +225,50 @@
           App.haptic('selection');
         });
       });
+
       App.initTelegram();
       App.autoLogin();
     </script>
+
     <style>
-      :root { --bg-color:#000; --text-color:#fff; --hint-color:#8e8e93; --link-color:#0a84ff; --button-color:#0a84ff; --button-text-color:#fff; --secondary-bg-color:#1c1c1e; --radius-l:20px; --radius-m:16px; --spacing-l:24px; --spacing-base:16px; }
-      *{margin:0;padding:0;box-sizing:border-box;}
-      body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:var(--bg-color);color:var(--text-color);min-height:100vh;overflow:hidden;}
-      .container{padding:var(--spacing-l);padding-bottom:80px;}
-      .card{background:var(--secondary-bg-color);border-radius:var(--radius-l);padding:var(--spacing-l);margin-bottom:var(--spacing-base);}
-      .btn{background:var(--button-color);color:var(--button-text-color);border:none;border-radius:var(--radius-m);padding:16px;font-size:17px;font-weight:600;width:100%;cursor:pointer;}
-      .btn-secondary{background:rgba(255,255,255,0.1);}
-      input{margin-bottom:var(--spacing-base);width:100%;padding:16px;border-radius:var(--radius-m);border:none;background:rgba(255,255,255,0.1);color:var(--text-color);font-size:17px;}
-      .bottom-nav{position:fixed;bottom:0;left:0;right:0;background:rgba(0,0,0,0.85);backdrop-filter:blur(20px);padding:8px 16px env(safe-area-inset-bottom);display:none;justify-content:space-around;border-top:1px solid rgba(255,255,255,0.05);z-index:100;}
-      .nav-item{text-align:center;color:var(--hint-color);font-size:10px;padding:8px;border-radius:var(--radius-m);flex:1;}
-      .nav-item.active{color:var(--link-color);background:rgba(10,132,255,0.15);}
-      .nav-item svg{width:24px;height:24px;display:block;margin:0 auto 4px;}
-      #toast{position:fixed;bottom:100px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,0.8);color:white;padding:12px 24px;border-radius:30px;opacity:0;transition:opacity .3s;z-index:300;}
-      #toast.visible{opacity:1;}
-      #status-badge{display:none;position:fixed;top:16px;right:16px;background:#ff9f0a;color:#000;padding:8px 16px;border-radius:20px;font-weight:600;z-index:90;}
+      :root {
+        --bg: #000;
+        --text: #fff;
+        --hint: #aaa;
+        --link: #0a84ff;
+        --button: #0a84ff;
+        --button-text: #fff;
+        --secondary-bg: #111;
+      }
+      * { margin:0; padding:0; box-sizing:border-box; }
+      body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background:var(--bg); color:var(--text); min-height:100vh; overflow:hidden; }
+      .container { padding:24px; padding-bottom:100px; }
+      h2 { font-size:28px; font-weight:700; text-align:center; margin-bottom:32px; }
+      h3 { font-size:20px; font-weight:600; margin-bottom:8px; }
+      .card { background:var(--secondary-bg); border-radius:20px; padding:24px; margin-bottom:20px; box-shadow:0 4px 20px rgba(0,0,0,0.3); animation:fadeIn 0.4s ease-out; }
+      .price { font-size:32px; font-weight:700; color:var(--link); margin:16px 0; }
+      .hint { font-size:15px; color:var(--hint); text-align:center; margin:20px 0; }
+      .link { font-size:13px; word-break:break-all; color:var(--hint); margin:16px 0; }
+      .qr { width:100%; border-radius:16px; margin:20px 0; }
+      .status { font-size:14px; padding:6px 12px; background:rgba(0,200,0,0.2); color:#0f0; border-radius:12px; display:inline-block; }
+      .btn { background:var(--button); color:var(--button-text); border:none; border-radius:16px; padding:16px; font-size:17px; font-weight:600; width:100%; cursor:pointer; transition:transform 0.1s, opacity 0.2s; }
+      .btn:active { transform:scale(0.96); }
+      .btn.secondary { background:rgba(255,255,255,0.1); color:var(--text); }
+      .btn.primary { box-shadow:0 8px 20px rgba(10,132,255,0.3); }
+      .bottom-nav { position:fixed; bottom:0; left:0; right:0; background:rgba(0,0,0,0.8); backdrop-filter:blur(20px); padding:12px 16px env(safe-area-inset-bottom); display:none; justify-content:space-around; border-top:1px solid rgba(255,255,255,0.05); animation:slideUp 0.4s ease-out; }
+      .nav-item { text-align:center; color:var(--hint); font-size:11px; padding:8px; border-radius:16px; transition:all 0.2s; flex:1; }
+      .nav-item.active { color:var(--link); background:rgba(10,132,255,0.15); }
+      .nav-item svg { width:28px; height:28px; display:block; margin:0 auto 6px; }
+      #toast { position:fixed; bottom:100px; left:50%; transform:translateX(-50%); background:rgba(0,0,0,0.9); color:white; padding:14px 28px; border-radius:30px; opacity:0; transition:opacity 0.3s, transform 0.3s; z-index:1000; font-size:16px; }
+      #toast.show { opacity:1; transform:translateX(-50%) translateY(-10px); }
+      #status-badge { position:fixed; top:20px; right:20px; background:#ff9f0a; color:#000; padding:10px 20px; border-radius:30px; font-weight:600; font-size:14px; opacity:0; transition:opacity 0.3s; z-index:90; }
+      #status-badge.show { opacity:1; }
+      @keyframes fadeIn { from { opacity:0; transform:translateY(20px); } to { opacity:1; transform:translateY(0); } }
+      @keyframes slideUp { from { transform:translateY(100%); } to { transform:translateY(0); } }
+      .center { text-align:center; }
+      .mono { font-family:monospace; }
+      .section-title { font-size:22px; font-weight:600; margin:24px 0 16px; text-align:center; }
+      .preview { margin:20px 0; text-align:center; }
     </style>
 </head>
 <body>
@@ -272,28 +277,30 @@
     <div class="container">
       <h2 id="page-title">Remnawave</h2>
       <div id="content">
-        <p class="caption text-center">Авторизация через Telegram...</p>
+        <p class="hint center">Авторизация...</p>
       </div>
     </div>
   </div>
+
   <nav class="bottom-nav">
     <div class="nav-item active" data-tab="subscriptions">
-      <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2"/></svg>
       <div>Подписки</div>
     </div>
     <div class="nav-item" data-tab="purchase">
-      <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3h2l.4 2M7.5 13h9l4-8H6m1.5 8L6 5m1.5 8-2.3 2.3a1.8 1.8 0 00.8 3h12a2 2 0 100-4h-12"/></svg>
       <div>Оформить</div>
     </div>
     <div class="nav-item" data-tab="tutorial">
-      <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/></svg>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 6v6l4 2m6-2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
       <div>Обучение</div>
     </div>
     <div class="nav-item" data-tab="admin" id="admin-tab">
-      <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.354a4 0 0 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"/></svg>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-8 0v2m4-10a4 4 0 100-8 4 4 0 000 8z"/></svg>
       <div>Админ</div>
     </div>
   </nav>
+
   <div id="toast"></div>
 </body>
 </html>
