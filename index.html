@@ -63,27 +63,39 @@
       };
 
       App.autoLogin = async () => {
-        const tgUser = Telegram.WebApp.initDataUnsafe.user;
-        if (!tgUser || !tgUser.id) {
-          document.getElementById('content').innerHTML = '<p class="hint">Откройте через кнопку в боте</p>';
-          return;
-        }
+  const tgUser = Telegram.WebApp.initDataUnsafe.user;
+  if (!tgUser || !tgUser.id) {
+    document.getElementById('content').innerHTML = '<p class="caption text-center">Ошибка авторизации.<br>Откройте через кнопку в боте.</p>';
+    return;
+  }
+  const userId = tgUser.id.toString();
+  const username = tgUser.username || tgUser.first_name || 'User';
+  const role = ADMIN_IDS.includes(tgUser.id) ? 'admin' : 'user';
+  try {
+    await setDoc(doc(db, "users", userId), {
+      username,
+      role,
+      telegramId: tgUser.id,
+      lastLogin: serverTimestamp()
+    }, { merge: true });
+  } catch (e) {
+    App.showToast('Ошибка соединения');
+    console.error(e);
+    return;
+  }
+  App.user = { id: userId, username, role };
+  document.getElementById('admin-tab').style.display = role === 'admin' ? 'flex' : 'none';
 
-        const userId = tgUser.id.toString();
-        const username = tgUser.username || tgUser.first_name || 'User';
-        const role = ADMIN_IDS.includes(tgUser.id) ? 'admin' : 'user';
+  // ФИКС: показываем навигацию
+  const nav = document.querySelector('.bottom-nav');
+  nav.style.display = 'flex';
+  nav.classList.add('show');
 
-        await setDoc(doc(db, "users", userId), { username, role, telegramId: tgUser.id, lastLogin: serverTimestamp() }, { merge: true });
-
-        App.user = { id: userId, username, role };
-        document.getElementById('admin-tab').style.display = role === 'admin' ? 'flex' : 'none';
-        document.querySelector('.bottom-nav').classList.add('show');
-
-        App.loadUserData();
-        App.renderCurrentTab();
-        App.haptic('light');
-        App.showToast(`Привет, ${username}`);
-      };
+  App.loadUserData();
+  App.renderCurrentTab();
+  App.haptic('light');
+  App.showToast(`Добро пожаловать, ${username}!`);
+};
 
       App.loadUserData = () => {
         onSnapshot(query(collection(db, "subscriptions"), where("userId", "==", App.user.id)), (snap) => {
