@@ -12,19 +12,20 @@
 
       // ВСТАВЬ СВОЙ FIREBASE CONFIG
       const firebaseConfig = {
-        apiKey: "YOUR_API_KEY",
-        authDomain: "your-project.firebaseapp.com",
-        projectId: "your-project",
-        storageBucket: "your-project.appspot.com",
-        messagingSenderId: "123456789",
-        appId: "1:123456789:web:abcdef"
+        apiKey: "AIzaSyAkRl7PNxZHQIPiqCbmoTbOdLteKJ8DWwI",
+        authDomain: "servicehub-e6821.firebaseapp.com",
+        projectId: "servicehub-e6821",
+        storageBucket: "servicehub-e6821.firebasestorage.app",
+        messagingSenderId: "208780669426",
+        appId: "1:208780669426:web:3f141d0d6eecef1a397b6b",
+        measurementId: "G-4L17GBWVV0"
       };
 
       const app = initializeApp(firebaseConfig);
       const db = getFirestore(app);
 
       // ВСТАВЬ СВОЙ TELEGRAM ID ДЛЯ АДМИНА (узнай у @userinfobot)
-      const ADMIN_IDS = [123456789]; // Замени на свой реальный ID
+      const ADMIN_IDS = [935754023]; // Замени на свой реальный ID
 
       const App = {
         user: null,
