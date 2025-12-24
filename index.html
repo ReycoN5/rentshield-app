@@ -477,21 +477,29 @@
 
            content.appendChild(chatContainer);
 
-           const inputArea = document.createElement('div');
-           inputArea.className = 'chat-input-area';
-           inputArea.innerHTML = `
-             <input type="text" id="ticket-message" placeholder="Сообщение..." autocomplete="off">
-             <button id="submit-ticket-btn" onclick="App.submitTicket()">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
-             </button>
-           `;
-           content.appendChild(inputArea);
-           
-           setTimeout(() => {
-              document.getElementById('ticket-message').addEventListener('keypress', (e) => {
-                  if(e.key === 'Enter') App.submitTicket();
-              });
-           }, 0);
+                   const inputArea = document.createElement('div');
+        inputArea.className = 'chat-input-area';
+        inputArea.innerHTML = `
+          <input type="text" id="ticket-message" placeholder="Сообщение..." autocomplete="off">
+          <button id="submit-ticket-btn">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+          </button>
+        `;
+        content.appendChild(inputArea);
+
+        // Привязываем после вставки в DOM
+        setTimeout(() => {
+          const input = document.getElementById('ticket-message');
+          const btn = document.getElementById('submit-ticket-btn');
+          if (input) {
+            input.addEventListener('keypress', (e) => {
+              if (e.key === 'Enter') App.submitTicket();
+            });
+          }
+          if (btn) {
+            btn.addEventListener('click', App.submitTicket);
+          }
+        }, 100);
 
         } else if (App.currentTab === 'admin') {
           if (App.user.role !== 'admin') return;
@@ -603,34 +611,44 @@
           input.value = '';
       };
 
+       window.App = App; // Критически важно — делает App доступным для onclick в innerHTML
+
       document.addEventListener('DOMContentLoaded', () => {
+        // Навигация
         document.querySelectorAll('.nav-item').forEach(item => {
-            item.addEventListener('click', e => {
+          item.addEventListener('click', e => {
             document.querySelector('.nav-item.active')?.classList.remove('active');
             e.currentTarget.classList.add('active');
             App.currentTab = e.currentTarget.dataset.tab;
-            
-            const icon = e.currentTarget.querySelector('svg');
-            icon.style.transform = 'scale(1.2)';
-            setTimeout(() => icon.style.transform = 'scale(1)', 200);
-
             App.renderCurrentTab();
             App.haptic('light');
-            });
+          });
         });
 
-        document.getElementById('payment-modal').addEventListener('click', (e) => {
-            if(e.target.id === 'payment-modal') {
-                e.target.classList.remove('show');
+        // Закрытие модалки оплаты по клику вне
+        const paymentModal = document.getElementById('payment-modal');
+        paymentModal.addEventListener('click', (e) => {
+          if (e.target === paymentModal) {
+            paymentModal.classList.remove('show');
+          }
+        });
+
+        // Закрытие админ-модалки
+        const adminModal = document.getElementById('admin-confirm-modal');
+        if (adminModal) {
+          adminModal.addEventListener('click', (e) => {
+            if (e.target === adminModal) {
+              App.closeAdminModal();
             }
-        });
+          });
+        }
 
-        // Admin Modal Close on Click Outside
-        document.getElementById('admin-confirm-modal').addEventListener('click', (e) => {
-             if(e.target.id === 'admin-confirm-modal') {
-                 App.closeAdminModal();
-             }
-        });
+        // Привязываем кнопки в модалке оплаты (на случай, если они не работают)
+        const copyBtn = document.querySelector('#payment-modal .btn.secondary');
+        if (copyBtn) copyBtn.onclick = App.copyPhone;
+
+        const payBtn = document.querySelector('#payment-modal .btn.primary');
+        if (payBtn) payBtn.onclick = App.confirmPayment;
 
         App.initTelegram();
         App.autoLogin();
