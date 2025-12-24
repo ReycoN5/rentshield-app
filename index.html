@@ -23,7 +23,7 @@
       const app = initializeApp(firebaseConfig);
       const db = getFirestore(app);
 
-      const ADMIN_IDS = [935754023]; // Твой ID
+      const ADMIN_IDS = [935754023]; // Твой Telegram ID
 
       const App = {
         user: null,
@@ -35,7 +35,7 @@
 
       App.initTelegram = () => {
         if (!window.Telegram?.WebApp) {
-          document.getElementById('content').innerHTML = '<p class="caption text-center">Открывайте через Telegram</p>';
+          document.getElementById('content').innerHTML = '<p class="caption text-center">Открывайте через Telegram бот</p>';
           return;
         }
         Telegram.WebApp.ready();
@@ -62,18 +62,11 @@
         }
       };
 
-      // Функция для переключения экранов
-      App.showMainScreen = () => {
-        document.getElementById('login-screen').style.display = 'none';
-        document.getElementById('main-app').style.display = 'block';
-        document.querySelector('.bottom-nav').style.display = 'flex';
-      };
-
       App.autoLogin = async () => {
         const tgUser = Telegram.WebApp.initDataUnsafe.user;
 
         if (!tgUser || !tgUser.id) {
-          document.getElementById('content').innerHTML = '<p class="caption text-center">Не удалось получить данные пользователя.<br>Откройте через кнопку бота.</p>';
+          document.getElementById('content').innerHTML = '<p class="caption text-center">Ошибка авторизации.<br>Откройте приложение через кнопку в боте.</p>';
           return;
         }
 
@@ -89,16 +82,14 @@
             lastLogin: serverTimestamp()
           }, { merge: true });
         } catch (e) {
-          App.showToast('Ошибка соединения с сервером');
+          App.showToast('Ошибка соединения');
           console.error(e);
           return;
         }
 
         App.user = { id: userId, username, role };
-
         document.getElementById('admin-tab').style.display = role === 'admin' ? 'flex' : 'none';
-
-        App.showMainScreen(); // <-- ВАЖНО: скрываем логин, показываем основной интерфейс
+        document.querySelector('.bottom-nav').style.display = 'flex';
 
         App.loadUserData();
         App.renderCurrentTab();
@@ -341,23 +332,13 @@
     </style>
 </head>
 <body>
-  <!-- Экран логина (для fallback, если нет Telegram) -->
-  <div id="login-screen" class="container" style="display:flex;align-items:center;justify-content:center;min-height:100vh;">
-    <div style="width:100%;max-width:360px;">
-      <h1 style="text-align:center;margin-bottom:32px;">Remnawave</h1>
-      <div class="card">
-        <p class="caption text-center">Открывайте приложение через кнопку в боте Telegram</p>
-      </div>
-    </div>
-  </div>
-
-  <!-- Основной интерфейс -->
+  <!-- Только основной интерфейс — формы логина нет -->
   <div id="main-app">
     <div id="status-badge">Ожидание подтверждения...</div>
     <div class="container">
       <h2 id="page-title">Remnawave</h2>
       <div id="content">
-        <p class="caption text-center">Авторизация...</p>
+        <p class="caption text-center">Авторизация через Telegram...</p>
       </div>
     </div>
   </div>
