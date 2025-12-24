@@ -62,11 +62,18 @@
         }
       };
 
+      // Функция для переключения экранов
+      App.showMainScreen = () => {
+        document.getElementById('login-screen').style.display = 'none';
+        document.getElementById('main-app').style.display = 'block';
+        document.querySelector('.bottom-nav').style.display = 'flex';
+      };
+
       App.autoLogin = async () => {
         const tgUser = Telegram.WebApp.initDataUnsafe.user;
 
         if (!tgUser || !tgUser.id) {
-          document.getElementById('content').innerHTML = '<p class="caption text-center">Не удалось получить данные Telegram.<br>Откройте через кнопку в боте.</p>';
+          document.getElementById('content').innerHTML = '<p class="caption text-center">Не удалось получить данные пользователя.<br>Откройте через кнопку бота.</p>';
           return;
         }
 
@@ -74,16 +81,24 @@
         const username = tgUser.username || tgUser.first_name || 'User';
         const role = ADMIN_IDS.includes(tgUser.id) ? 'admin' : 'user';
 
-        await setDoc(doc(db, "users", userId), {
-          username,
-          role,
-          telegramId: tgUser.id,
-          lastLogin: serverTimestamp()
-        }, { merge: true });
+        try {
+          await setDoc(doc(db, "users", userId), {
+            username,
+            role,
+            telegramId: tgUser.id,
+            lastLogin: serverTimestamp()
+          }, { merge: true });
+        } catch (e) {
+          App.showToast('Ошибка соединения с сервером');
+          console.error(e);
+          return;
+        }
 
         App.user = { id: userId, username, role };
+
         document.getElementById('admin-tab').style.display = role === 'admin' ? 'flex' : 'none';
-        document.querySelector('.bottom-nav').style.display = 'flex';
+
+        App.showMainScreen(); // <-- ВАЖНО: скрываем логин, показываем основной интерфейс
 
         App.loadUserData();
         App.renderCurrentTab();
@@ -308,7 +323,7 @@
     <style>
       :root { --bg-color:#000; --text-color:#fff; --hint-color:#8e8e93; --link-color:#0a84ff; --button-color:#0a84ff; --button-text-color:#fff; --secondary-bg-color:#1c1c1e; --radius-l:20px; --radius-m:16px; --spacing-l:24px; --spacing-base:16px; }
       *{margin:0;padding:0;box-sizing:border-box;}
-      body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:var(--bg-color);color:var(--text-color);min-height:100vh;position:fixed;width:100%;overflow:hidden;}
+      body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:var(--bg-color);color:var(--text-color);min-height:100vh;overflow:hidden;}
       .container{padding:var(--spacing-l);padding-bottom:80px;}
       .card{background:var(--secondary-bg-color);border-radius:var(--radius-l);padding:var(--spacing-l);margin-bottom:var(--spacing-base);}
       .btn{background:var(--button-color);color:var(--button-text-color);border:none;border-radius:var(--radius-m);padding:16px;font-size:17px;font-weight:600;width:100%;cursor:pointer;}
@@ -321,38 +336,49 @@
       #toast{position:fixed;bottom:100px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,0.8);color:white;padding:12px 24px;border-radius:30px;opacity:0;transition:opacity .3s;z-index:300;}
       #toast.visible{opacity:1;}
       #status-badge{display:none;position:fixed;top:16px;right:16px;background:#ff9f0a;color:#000;padding:8px 16px;border-radius:20px;font-weight:600;z-index:90;}
-      .hidden{display:none!important;}
-      h3{font-size:18px;margin-bottom:8px;}
-      .caption{font-size:14px;opacity:0.7;}
+      #login-screen, #main-app {min-height:100vh;}
+      #main-app {display:none;}
     </style>
 </head>
 <body>
+  <!-- Экран логина (для fallback, если нет Telegram) -->
   <div id="login-screen" class="container" style="display:flex;align-items:center;justify-content:center;min-height:100vh;">
     <div style="width:100%;max-width:360px;">
       <h1 style="text-align:center;margin-bottom:32px;">Remnawave</h1>
       <div class="card">
-        <input type="text" id="username" placeholder="Логин">
-        <input type="password" id="password" placeholder="Пароль">
-        <button class="btn" id="login-btn">Войти</button>
-        <p class="caption" style="text-align:center;margin-top:16px;">Тест: admin / 123<br>user1 / 123</p>
+        <p class="caption text-center">Открывайте приложение через кнопку в боте Telegram</p>
       </div>
     </div>
   </div>
 
-  <body>
+  <!-- Основной интерфейс -->
   <div id="main-app">
     <div id="status-badge">Ожидание подтверждения...</div>
     <div class="container">
       <h2 id="page-title">Remnawave</h2>
-      <div id="content"><p class="caption text-center">Авторизация через Telegram...</p></div>
+      <div id="content">
+        <p class="caption text-center">Авторизация...</p>
+      </div>
     </div>
   </div>
 
   <nav class="bottom-nav">
-    <div class="nav-item active" data-tab="subscriptions"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg><div>Подписки</div></div>
-    <div class="nav-item" data-tab="purchase"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z"/></svg><div>Оформить</div></div>
-    <div class="nav-item" data-tab="tutorial"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/></svg><div>Обучение</div></div>
-    <div class="nav-item" data-tab="admin" id="admin-tab" style="display:none;"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"/></svg><div>Админ</div></div>
+    <div class="nav-item active" data-tab="subscriptions">
+      <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>
+      <div>Подписки</div>
+    </div>
+    <div class="nav-item" data-tab="purchase">
+      <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
+      <div>Оформить</div>
+    </div>
+    <div class="nav-item" data-tab="tutorial">
+      <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/></svg>
+      <div>Обучение</div>
+    </div>
+    <div class="nav-item" data-tab="admin" id="admin-tab">
+      <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"/></svg>
+      <div>Админ</div>
+    </div>
   </nav>
 
   <div id="toast"></div>
