@@ -7,7 +7,7 @@
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <script type="module">
       import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
-      import { getFirestore, collection, doc, setDoc, onSnapshot, updateDoc, query, where, getDocs, serverTimestamp, addDoc, orderBy } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+      import { getFirestore, collection, doc, setDoc, onSnapshot, updateDoc, query, where, getDocs, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 
       const firebaseConfig = {
         apiKey: "AIzaSyAkRl7PNxZHQIPiqCbmoTbOdLteKJ8DWwI",
@@ -29,7 +29,7 @@
         { id: 'month6', name: '6 месяцев', price: 1200, duration: '180 дней' }
       ];
 
-      const PHONE_NUMBER = "+7 (999) 123-45-67"; // Замени на свой реальный номер
+      const PHONE_NUMBER = "+7 (999) 123-45-67"; // Замени на свой
 
       const App = {
         user: null,
@@ -37,8 +37,6 @@
         selectedPlan: null,
         pendingRequest: null,
         subscriptions: [],
-        messages: [],
-        currentChatUser: null,
         db
       };
 
@@ -46,7 +44,10 @@
         if (!window.Telegram?.WebApp) return;
         Telegram.WebApp.ready();
         Telegram.WebApp.expand();
-
+        // Allow Telegram to control the background color for seamless integration
+        Telegram.WebApp.setBackgroundColor(Telegram.WebApp.themeParams.bg_color || '#000000');
+        Telegram.WebApp.setHeaderColor(Telegram.WebApp.themeParams.bg_color || '#000000');
+        
         const tp = Telegram.WebApp.themeParams;
         if (tp) {
           const root = document.documentElement;
@@ -56,9 +57,16 @@
 
       App.showToast = (msg) => {
         const t = document.getElementById('toast');
+        // Reset animation
+        t.style.animation = 'none';
+        t.offsetHeight; /* trigger reflow */
+        t.style.animation = null;
+        
         t.textContent = msg;
         t.classList.add('show');
-        setTimeout(() => t.classList.remove('show'), 3000);
+        
+        if (App.toastTimeout) clearTimeout(App.toastTimeout);
+        App.toastTimeout = setTimeout(() => t.classList.remove('show'), 3000);
       };
 
       App.haptic = (type = 'light') => {
@@ -71,35 +79,25 @@
       App.autoLogin = async () => {
         const tgUser = Telegram.WebApp.initDataUnsafe.user;
         if (!tgUser || !tgUser.id) {
-          document.getElementById('content').innerHTML = '<div class="empty-state"><p class="hint">Откройте через кнопку в боте</p></div>';
+          document.getElementById('content').innerHTML = '<div class="empty-state"><div class="icon-box">⚠️</div><p class="hint">Откройте приложение через кнопку в боте Telegram</p></div>';
           return;
         }
         const userId = tgUser.id.toString();
         const username = tgUser.username || tgUser.first_name || 'User';
         const role = ADMIN_IDS.includes(tgUser.id) ? 'admin' : 'user';
-
-        try {
-          await setDoc(doc(db, "users", userId), {
-            username,
-            role,
-            telegramId: tgUser.id,
-            lastLogin: serverTimestamp()
-          }, { merge: true });
-        } catch (e) {
-          console.error(e);
-          App.showToast('Ошибка соединения');
-          return;
-        }
-
+        await setDoc(doc(db, "users", userId), { username, role, telegramId: tgUser.id, lastLogin: serverTimestamp() }, { merge: true });
         App.user = { id: userId, username, role };
         document.getElementById('admin-tab').style.display = role === 'admin' ? 'flex' : 'none';
         const nav = document.querySelector('.bottom-nav');
         nav.style.display = 'flex';
+        // Force reflow for animation
+        void nav.offsetWidth;
         nav.classList.add('show');
-
         App.loadUserData();
         App.renderCurrentTab();
         App.haptic('light');
+        // Removed initial toast to keep UI clean on load
+        // App.showToast(`Привет, ${username}`);
       };
 
       App.loadUserData = () => {
@@ -148,178 +146,100 @@
         App.showToast('Заявка отправлена! Ожидайте подтверждения');
       };
 
-      App.loadMessages = () => {
-        const chatRef = collection(db, "chats", App.user.id, "messages");
-        onSnapshot(query(chatRef, orderBy("timestamp")), (snap) => {
-          App.messages = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-          App.renderChat();
-        });
-      };
-
-      App.sendMessage = async () => {
-        const input = document.getElementById('chat-input');
-        const text = input.value.trim();
-        if (!text) return;
-        const chatRef = collection(db, "chats", App.user.id, "messages");
-        await addDoc(chatRef, {
-          text,
-          sender: 'user',
-          timestamp: serverTimestamp()
-        });
-        input.value = '';
-        App.haptic('light');
-      };
-
-      App.renderChat = () => {
-        const chat = document.getElementById('chat-messages');
-        if (!chat) return;
-        chat.innerHTML = '';
-        App.messages.forEach(msg => {
-          const bubble = document.createElement('div');
-          bubble.className = `message ${msg.sender}`;
-          bubble.innerHTML = `
-            <p>${msg.text}</p>
-            <span class="time">${msg.timestamp?.toDate()?.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) || ''}</span>
-          `;
-          chat.appendChild(bubble);
-        });
-        chat.scrollTop = chat.scrollHeight;
-      };
-
-      App.renderSupportTab = () => {
-        const content = document.getElementById('content');
-        content.innerHTML = `
-          <div class="chat-container">
-            <div id="chat-messages" class="chat-messages"></div>
-            <div class="chat-input-bar">
-              <input type="text" id="chat-input" placeholder="Напишите сообщение...">
-              <button onclick="App.sendMessage()">Отправить</button>
-            </div>
-          </div>
-        `;
-        App.loadMessages();
-      };
-
-      App.renderAdminSupport = async () => {
-        const content = document.getElementById('content');
-        content.innerHTML = '<h3 class="section-title">Чаты с пользователями</h3>';
-        const usersSnap = await getDocs(collection(db, "users"));
-        const chatList = document.createElement('div');
-        chatList.className = 'chat-list';
-        for (const userDoc of usersSnap.docs) {
-          const userData = userDoc.data();
-          if (userData.role === 'admin') continue;
-          const item = document.createElement('div');
-          item.className = 'chat-user-item';
-          item.onclick = () => App.openAdminChat(userDoc.id, userData.username || 'Пользователь');
-          item.innerHTML = `
-            <p class="username">@${userData.username || 'Без имени'}</p>
-            <p class="hint">ID: ${userDoc.id}</p>
-          `;
-          chatList.appendChild(item);
-        }
-        content.appendChild(chatList);
-      };
-
-      App.openAdminChat = (userId, username) => {
-        App.currentChatUser = { id: userId, username };
-        const content = document.getElementById('content');
-        content.innerHTML = `
-          <div class="chat-header">
-            <button class="back-btn" onclick="App.renderCurrentTab()">←</button>
-            <p class="chat-title">@${username}</p>
-          </div>
-          <div class="chat-container">
-            <div id="admin-chat-messages" class="chat-messages"></div>
-            <div class="chat-input-bar">
-              <input type="text" id="admin-chat-input" placeholder="Ответить...">
-              <button onclick="App.sendAdminMessage()">Отправить</button>
-            </div>
-          </div>
-        `;
-        const chatRef = collection(db, "chats", userId, "messages");
-        onSnapshot(query(chatRef, orderBy("timestamp")), (snap) => {
-          const messages = document.getElementById('admin-chat-messages');
-          messages.innerHTML = '';
-          snap.docs.forEach(d => {
-            const msg = d.data();
-            const bubble = document.createElement('div');
-            bubble.className = `message ${msg.sender}`;
-            bubble.innerHTML = `<p>${msg.text}</p><span class="time">${msg.timestamp?.toDate()?.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>`;
-            messages.appendChild(bubble);
-          });
-          messages.scrollTop = messages.scrollHeight;
-        });
-      };
-
-      App.sendAdminMessage = async () => {
-        const input = document.getElementById('admin-chat-input');
-        const text = input.value.trim();
-        if (!text) return;
-        const chatRef = collection(db, "chats", App.currentChatUser.id, "messages");
-        await addDoc(chatRef, {
-          text,
-          sender: 'admin',
-          timestamp: serverTimestamp()
-        });
-        input.value = '';
-        App.haptic('light');
-      };
-
       App.renderCurrentTab = () => {
         const content = document.getElementById('content');
-        content.innerHTML = '';
         const title = document.getElementById('page-title');
-        title.textContent = '';
+        content.innerHTML = '';
+        title.textContent = ''; // Title is handled in the header now
+
+        // Update Header Title based on Tab
+        const headerTitle = document.getElementById('header-title');
 
         if (App.currentTab === 'subscriptions') {
-          title.textContent = 'Мои подписки';
+          headerTitle.textContent = 'Мои подписки';
           if (App.subscriptions.length === 0) {
-            content.innerHTML = '<div class="empty-state"><p class="hint">Нет активных подписок</p></div>';
+            content.innerHTML = `
+                <div class="empty-state fade-in">
+                    <div class="icon-box">🔍</div>
+                    <p class="hint">У вас пока нет активных подписок</p>
+                    <button class="btn primary" onclick="document.querySelector('[data-tab=purchase]').click()">Оформить подписку</button>
+                </div>`;
           } else {
             App.subscriptions.forEach(sub => {
               const card = document.createElement('div');
-              card.className = 'card';
+              card.className = 'card subscription-card fade-in';
               card.innerHTML = `
-                <h3>${sub.planName || 'Премиум'}</h3>
-                <p class="status active">Активна</p>
-                ${sub.connectionLink ? `<p class="link">${sub.connectionLink}</p>` : ''}
-                ${sub.qrBase64 ? `<img src="${sub.qrBase64}" class="qr">` : ''}
-                ${sub.connectionLink ? `<button class="btn secondary" onclick="navigator.clipboard.writeText('${sub.connectionLink}'); App.showToast('Скопировано')">Скопировать</button>` : ''}
+                <div class="card-header">
+                    <h3>${sub.planName}</h3>
+                    <span class="status active">Активна</span>
+                </div>
+                ${sub.connectionLink ? `
+                    <div class="link-container">
+                        <div class="link-label">Ссылка подключения</div>
+                        <p class="link text-truncate">${sub.connectionLink}</p>
+                    </div>` : ''}
+                ${sub.qrBase64 ? `<div class="qr-container"><img src="${sub.qrBase64}" class="qr"></div>` : ''}
+                <div class="card-actions">
+                    ${sub.connectionLink ? `<button class="btn secondary" onclick="navigator.clipboard.writeText('${sub.connectionLink}'); App.showToast('Скопировано')">Скопировать ключ</button>` : ''}
+                </div>
               `;
               content.appendChild(card);
             });
           }
         } else if (App.currentTab === 'purchase') {
-          title.textContent = 'Оформление';
+          headerTitle.textContent = 'Выберите тариф';
           const grid = document.createElement('div');
           grid.className = 'plans-grid';
+          
           PLANS.forEach(plan => {
             const card = document.createElement('div');
-            card.className = 'plan-card';
+            card.className = 'plan-card fade-in';
             card.onclick = () => App.showPaymentModal(plan);
             card.innerHTML = `
-              <h3>${plan.name}</h3>
-              <p class="price">${plan.price} ₽</p>
-              <p class="duration">${plan.duration}</p>
+              <div class="plan-info">
+                  <h3>${plan.name}</h3>
+                  <p class="duration">${plan.duration}</p>
+              </div>
+              <div class="plan-price">
+                ${plan.price} ₽
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
+              </div>
             `;
             grid.appendChild(card);
           });
           content.appendChild(grid);
         } else if (App.currentTab === 'tutorial') {
-          title.textContent = 'Инструкция';
+          headerTitle.textContent = 'Инструкция';
           content.innerHTML = `
-            <div class="card"><h3>1. Скачайте v2RayTun</h3><p>iOS / Android</p></div>
-            <div class="card"><h3>2. Скопируйте ссылку</h3><p>Из "Мои подписки"</p></div>
-            <div class="card"><h3>3. Вставьте или отсканируйте QR</h3></div>
+            <div class="tutorial-list fade-in">
+                <div class="tutorial-step">
+                    <div class="step-number">1</div>
+                    <div class="step-content">
+                        <h3>Скачайте приложение</h3>
+                        <p>Установите v2RayTun из AppStore или Google Play</p>
+                    </div>
+                </div>
+                <div class="tutorial-step">
+                    <div class="step-number">2</div>
+                    <div class="step-content">
+                        <h3>Скопируйте ключ</h3>
+                        <p>Перейдите в раздел "Мои подписки" и нажмите "Скопировать"</p>
+                    </div>
+                </div>
+                <div class="tutorial-step">
+                    <div class="step-number">3</div>
+                    <div class="step-content">
+                        <h3>Подключитесь</h3>
+                        <p>Откройте приложение, ключ вставится автоматически. Нажмите кнопку подключения.</p>
+                    </div>
+                </div>
+            </div>
           `;
-        } else if (App.currentTab === 'support') {
-          title.textContent = 'Поддержка';
-          App.renderSupportTab();
         } else if (App.currentTab === 'admin') {
           if (App.user.role !== 'admin') return;
-          title.textContent = 'Админ';
-          App.renderAdminSupport();
+          headerTitle.textContent = 'Админ панель';
+          content.innerHTML = '<div class="loader"></div>';
+          App.renderAdminPanel();
         }
       };
 
@@ -425,116 +345,515 @@
 
       document.addEventListener('DOMContentLoaded', () => {
         document.querySelectorAll('.nav-item').forEach(item => {
-        item.addEventListener('click', e => {
-          document.querySelector('.nav-item.active')?.classList.remove('active');
-          e.currentTarget.classList.add('active');
-          App.currentTab = e.currentTarget.dataset.tab;
-          App.renderCurrentTab();
-          App.haptic('light');
+            item.addEventListener('click', e => {
+            document.querySelector('.nav-item.active')?.classList.remove('active');
+            e.currentTarget.classList.add('active');
+            App.currentTab = e.currentTarget.dataset.tab;
+            
+            // Add slight bump animation to icon
+            const icon = e.currentTarget.querySelector('svg');
+            icon.style.transform = 'scale(1.2)';
+            setTimeout(() => icon.style.transform = 'scale(1)', 200);
+
+            App.renderCurrentTab();
+            App.haptic('light');
+            });
         });
+
+        // Close modal on click outside
+        document.getElementById('payment-modal').addEventListener('click', (e) => {
+            if(e.target.id === 'payment-modal') {
+                e.target.classList.remove('show');
+            }
+        });
+
+        App.initTelegram();
+        App.autoLogin();
       });
-
-      window.App = App;
-
-      App.initTelegram();
-      App.autoLogin();
     </script>
 
     <style>
+      /* --- Variables & Reset --- */
       :root {
-        --tg-theme-bg-color: #000;
+        /* Default Dark Theme Fallback */
+        --tg-theme-bg-color: #000000;
         --tg-theme-secondary-bg-color: #1c1c1e;
-        --tg-theme-text-color: #fff;
-        --tg-theme-hint-color: #aaa;
+        --tg-theme-text-color: #ffffff;
+        --tg-theme-hint-color: #98989d;
         --tg-theme-link-color: #0a84ff;
         --tg-theme-button-color: #0a84ff;
-        --tg-theme-button-text-color: #fff;
+        --tg-theme-button-text-color: #ffffff;
+        
+        --safe-area-top: env(safe-area-inset-top, 20px);
+        --safe-area-bottom: env(safe-area-inset-bottom, 20px);
+        
+        --radius-l: 24px;
+        --radius-m: 16px;
+        --radius-s: 12px;
       }
-      * { margin:0; padding:0; box-sizing:border-box; }
-      body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background:var(--tg-theme-bg-color); color:var(--tg-theme-text-color); min-height:100vh; overflow:hidden; }
-      .container { padding:32px 24px;padding-bottom:100px; }
-      h2 { font-size:28px; font-weight:700; text-align:center; margin-bottom:40px; }
-      .card { background:var(--tg-theme-secondary-bg-color); border-radius:24px; padding:28px; margin-bottom:24px; box-shadow:0 8px 32px rgba(0,0,0,0.4); }
-      .plan-card { background:var(--tg-theme-secondary-bg-color); padding:24px; margin-bottom:16px; border-radius:20px; cursor:pointer; transition:transform 0.2s; }
-      .plan-card:active { transform:scale(0.96); }
-      .price { font-size:36px; font-weight:700; color:var(--tg-theme-link-color); }
-      .hint { font-size:15px; color:var(--tg-theme-hint-color); text-align:center; }
-      .btn { background:var(--tg-theme-button-color); color:var(--tg-theme-button-text-color); border:none; border-radius:20px; padding:18px; font-size:18px; font-weight:600; width:100%; cursor:pointer; transition:transform 0.1s; }
-      .btn:active { transform:scale(0.96); }
-      .btn.secondary { background:rgba(255,255,255,0.1); color:var(--tg-theme-link-color); }
-      .bottom-nav { position:fixed; bottom:0; left:0; right:0; background:var(--tg-theme-secondary-bg-color); backdrop-filter:blur(20px); padding:12px 20px env(safe-area-inset-bottom); display:none; justify-content:space-around; border-top:1px solid rgba(255,255,255,0.05); animation:slideUp 0.5s ease-out; }
-      .nav-item { text-align:center; color:var(--tg-theme-hint-color); font-size:11px; padding:10px; border-radius:20px; transition:all 0.2s; flex:1; }
-      .nav-item.active { color:var(--tg-theme-link-color); background:rgba(10,132,255,0.15); }
-      .nav-item svg { width:28px; height:28px; display:block; margin:0 auto 8px; }
-      #toast { position:fixed; bottom:100px; left:50%; transform:translateX(-50%); background:rgba(0,0,0,0.9); color:white; padding:16px 32px; border-radius:32px; opacity:0; transition:opacity 0.3s, transform 0.3s; z-index:1000; font-size:16px; }
-      #toast.show { opacity:1; transform:translateX(-50%) translateY(-10px); }
-      #status-badge { position:fixed; top:24px; right:24px; background:#ff9f0a; color:#000; padding:12px 24px; border-radius:32px; font-weight:600; font-size:15px; opacity:0; transition:opacity 0.3s; z-index:90; }
-      #status-badge.show { opacity:1; }
-      .modal { position:fixed; inset:0; background:rgba(0,0,0,0.6); backdrop-filter:blur(10px); display:none; align-items:flex-end; justify-content:center; z-index:1000; }
-      .modal.show { display:flex; }
-      .modal-content { background:var(--tg-theme-secondary-bg-color); width:100%; max-width:500px; border-radius:32px 32px 0 0; padding:32px 24px calc(env(safe-area-inset-bottom) + 24px); box-shadow:0 -10px 40px rgba(0,0,0,0.3); animation:slideUpModal 0.4s ease-out; }
-      .modal h3 { font-size:24px; text-align:center; margin-bottom:8px; }
-      .modal .price { font-size:42px; font-weight:800; text-align:center; color:var(--tg-theme-text-color); margin:24px 0; }
-      .modal-phone { background:var(--tg-theme-bg-color); padding:20px; border-radius:20px; text-align:center; font-size:20px; font-weight:700; font-family:monospace; margin:16px 0 24px; }
-      @keyframes slideUp { from { transform:translateY(100%); } to { transform:translateY(0); } }
-      @keyframes slideUpModal { from { transform:translateY(100%); } to { transform:translateY(0); } }
 
-      /* Чат */
-      .chat-container { display:flex; flex-direction:column; height:calc(100vh - 140px); }
-      .chat-messages { flex:1; overflow-y:auto; padding:16px; display:flex; flex-direction:column; gap:12px; }
-      .message { max-width:80%; padding:12px 16px; border-radius:20px; position:relative; }
-      .message.user { align-self:flex-end; background:var(--tg-theme-button-color); color:var(--tg-theme-button-text-color); border-bottom-right-radius:4px; }
-      .message.admin { align-self:flex-start; background:var(--tg-theme-secondary-bg-color); color:var(--tg-theme-text-color); border-bottom-left-radius:4px; }
-      .message p { margin:0; font-size:16px; }
-      .message .time { font-size:11px; opacity:0.7; margin-top:4px; }
-      .chat-input-bar { display:flex; padding:12px; background:var(--tg-theme-secondary-bg-color); border-top:1px solid rgba(255,255,255,0.05); gap:8px; }
-      .chat-input-bar input { flex:1; background:var(--tg-theme-bg-color); border:none; border-radius:24px; padding:14px 20px; color:var(--tg-theme-text-color); font-size:16px; }
-      .chat-input-bar button { background:var(--tg-theme-button-color); color:var(--tg-theme-button-text-color); border:none; border-radius:50%; width:48px; height:48px; display:flex; align-items:center; justify-content:center; cursor:pointer; }
-      .chat-user-item { padding:16px; border-bottom:1px solid rgba(255,255,255,0.05); cursor:pointer; }
-      .chat-user-item:active { background:rgba(255,255,255,0.05); }
-      .chat-header { display:flex; align-items:center; gap:16px; padding:16px; border-bottom:1px solid rgba(255,255,255,0.05); }
-      .back-btn { background:none; border:none; font-size:24px; color:var(--tg-theme-link-color); cursor:pointer; }
-      .chat-title { font-size:18px; font-weight:600; }
+      * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+      
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+        background-color: var(--tg-theme-bg-color);
+        color: var(--tg-theme-text-color);
+        min-height: 100vh;
+        overflow-x: hidden;
+        /* Subtle gradient background for premium feel */
+        background-image: radial-gradient(circle at 50% 0%, rgba(10, 132, 255, 0.15), transparent 60%);
+        background-attachment: fixed;
+      }
+
+      /* --- Layout --- */
+      .container {
+        padding: calc(var(--safe-area-top) + 20px) 16px calc(var(--safe-area-bottom) + 90px);
+        max-width: 600px;
+        margin: 0 auto;
+        min-height: 100vh;
+        display: flex;
+        flex-direction: column;
+      }
+
+      /* --- Typography --- */
+      h2#page-title { display: none; } /* Hidden, replaced by sticky header */
+
+      .header-title-container {
+        margin-bottom: 24px;
+        padding: 0 8px;
+        animation: fadeIn 0.6s ease-out;
+      }
+
+      h1 {
+        font-size: 32px;
+        font-weight: 800;
+        letter-spacing: -0.5px;
+        background: linear-gradient(135deg, var(--tg-theme-text-color) 30%, var(--tg-theme-link-color));
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+      }
+
+      .section-title {
+        font-size: 13px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        color: var(--tg-theme-hint-color);
+        margin: 24px 0 8px 12px;
+        font-weight: 500;
+      }
+
+      /* --- Cards & Containers --- */
+      .card {
+        background: var(--tg-theme-secondary-bg-color);
+        border-radius: var(--radius-l);
+        padding: 20px;
+        margin-bottom: 16px;
+        position: relative;
+        overflow: hidden;
+        /* Subtle border for separation */
+        box-shadow: 0 4px 20px rgba(0,0,0,0.2); 
+      }
+
+      .plan-card {
+        background: var(--tg-theme-secondary-bg-color);
+        padding: 16px 20px;
+        margin-bottom: 1px; /* Separator style */
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        cursor: pointer;
+        transition: background 0.2s;
+        position: relative;
+      }
+      
+      .plan-card:first-child { border-top-left-radius: var(--radius-l); border-top-right-radius: var(--radius-l); }
+      .plan-card:last-child { border-bottom-left-radius: var(--radius-l); border-bottom-right-radius: var(--radius-l); margin-bottom: 16px; }
+      
+      .plans-grid {
+        display: flex;
+        flex-direction: column;
+        border-radius: var(--radius-l);
+        overflow: hidden;
+        background: var(--tg-theme-secondary-bg-color); /* For the gaps */
+      }
+
+      .plan-card:active {
+        background: rgba(255,255,255,0.05);
+      }
+
+      .plan-info h3 { font-size: 17px; font-weight: 600; margin-bottom: 4px; }
+      .plan-info .duration { font-size: 14px; color: var(--tg-theme-hint-color); }
+      
+      .plan-price {
+        font-size: 17px;
+        font-weight: 600;
+        color: var(--tg-theme-button-color);
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .subscription-card {
+        border: 1px solid rgba(255,255,255,0.05);
+      }
+
+      .card-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 16px;
+      }
+      
+      .card-header h3 { font-size: 20px; font-weight: 700; }
+
+      .status {
+        font-size: 12px;
+        padding: 4px 10px;
+        border-radius: 100px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+      }
+      .status.active { background: rgba(52, 199, 89, 0.2); color: #32d74b; }
+
+      .link-container {
+        background: rgba(0,0,0,0.2);
+        padding: 12px;
+        border-radius: var(--radius-s);
+        margin-bottom: 16px;
+      }
+      
+      .link-label { font-size: 11px; color: var(--tg-theme-hint-color); margin-bottom: 4px; text-transform: uppercase; }
+      .link { font-family: monospace; font-size: 14px; color: var(--tg-theme-text-color); word-break: break-all; opacity: 0.9; }
+      .text-truncate { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; }
+
+      .qr-container { display: flex; justify-content: center; margin: 16px 0; background: #fff; padding: 12px; border-radius: var(--radius-m); width: fit-content; margin: 16px auto;}
+      .qr { width: 140px; height: 140px; display: block; }
+      .qr-preview { max-width: 100%; border-radius: var(--radius-s); margin-top: 12px; }
+
+      /* --- Buttons --- */
+      .btn {
+        width: 100%;
+        padding: 16px;
+        border-radius: var(--radius-m);
+        border: none;
+        font-size: 16px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: transform 0.1s, opacity 0.2s;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        gap: 8px;
+        position: relative;
+        overflow: hidden;
+      }
+
+      .btn:active { transform: scale(0.98); opacity: 0.9; }
+
+      .btn.primary {
+        background: var(--tg-theme-button-color);
+        color: var(--tg-theme-button-text-color);
+        box-shadow: 0 4px 12px rgba(10, 132, 255, 0.3);
+      }
+
+      .btn.secondary {
+        background: rgba(255,255,255,0.08);
+        color: var(--tg-theme-button-color);
+        font-size: 15px;
+        padding: 12px;
+      }
+      
+      .btn.small { padding: 12px; font-size: 15px; }
+
+      /* --- Inputs (Admin) --- */
+      .styled-input {
+        width: 100%;
+        background: var(--tg-theme-bg-color);
+        border: 1px solid rgba(255,255,255,0.1);
+        color: var(--tg-theme-text-color);
+        padding: 14px;
+        border-radius: var(--radius-s);
+        font-size: 16px;
+        outline: none;
+        transition: border-color 0.2s;
+        margin-bottom: 12px;
+      }
+      .styled-input:focus { border-color: var(--tg-theme-button-color); }
+      
+      .file-label {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        width: 100%;
+        padding: 12px;
+        border: 2px dashed rgba(255,255,255,0.15);
+        border-radius: var(--radius-s);
+        color: var(--tg-theme-hint-color);
+        cursor: pointer;
+        font-size: 14px;
+        margin-bottom: 16px;
+      }
+      .hidden-input { display: none; }
+
+      /* --- Tutorial --- */
+      .tutorial-list { display: flex; flex-direction: column; gap: 24px; }
+      .tutorial-step { display: flex; gap: 16px; }
+      .step-number {
+        width: 32px; height: 32px;
+        background: var(--tg-theme-button-color);
+        color: var(--tg-theme-button-text-color);
+        border-radius: 50%;
+        display: flex; align-items: center; justify-content: center;
+        font-weight: 700; flex-shrink: 0;
+        font-size: 16px;
+      }
+      .step-content h3 { font-size: 17px; margin-bottom: 4px; font-weight: 600; }
+      .step-content p { font-size: 15px; color: var(--tg-theme-hint-color); line-height: 1.4; }
+
+      /* --- Empty State --- */
+      .empty-state {
+        text-align: center;
+        padding: 40px 20px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 16px;
+      }
+      .icon-box {
+        font-size: 48px;
+        margin-bottom: 8px;
+        filter: grayscale(1);
+        opacity: 0.5;
+      }
+
+      /* --- Bottom Navigation --- */
+      .bottom-nav {
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        background: rgba(28, 28, 30, 0.85); /* Fallback */
+        background: var(--tg-theme-secondary-bg-color);
+        backdrop-filter: blur(20px);
+        -webkit-backdrop-filter: blur(20px);
+        border-top: 0.5px solid rgba(255,255,255,0.1);
+        padding: 8px 16px calc(var(--safe-area-bottom) + 4px);
+        display: none;
+        justify-content: space-between;
+        z-index: 100;
+        opacity: 0;
+        transform: translateY(100%);
+        transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.4s;
+      }
+      .bottom-nav.show { opacity: 1; transform: translateY(0); }
+
+      .nav-item {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 4px;
+        color: var(--tg-theme-hint-color);
+        cursor: pointer;
+        transition: color 0.2s;
+        border-radius: 8px;
+      }
+      
+      .nav-item svg { width: 24px; height: 24px; margin-bottom: 4px; transition: transform 0.2s; stroke-width: 2px; }
+      .nav-item div { font-size: 10px; font-weight: 500; letter-spacing: 0.2px; }
+      
+      .nav-item.active { color: var(--tg-theme-button-color); }
+      .nav-item.active svg { stroke: var(--tg-theme-button-color); }
+
+      /* --- Modal --- */
+      .modal {
+        position: fixed;
+        inset: 0;
+        background: rgba(0,0,0,0.6);
+        backdrop-filter: blur(4px);
+        -webkit-backdrop-filter: blur(4px);
+        display: none;
+        align-items: flex-end;
+        justify-content: center;
+        z-index: 1000;
+        opacity: 0;
+        transition: opacity 0.3s;
+      }
+      .modal.show { display: flex; opacity: 1; }
+      
+      .modal-content {
+        background: var(--tg-theme-secondary-bg-color);
+        width: 100%;
+        max-width: 500px;
+        border-radius: 32px 32px 0 0;
+        padding: 32px 24px calc(var(--safe-area-bottom) + 24px);
+        box-shadow: 0 -10px 40px rgba(0,0,0,0.3);
+        transform: translateY(100%);
+        transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+      }
+      .modal.show .modal-content { transform: translateY(0); }
+
+      .modal-drag {
+        width: 40px; height: 4px; background: rgba(255,255,255,0.2);
+        border-radius: 2px; margin: 0 auto 24px;
+      }
+
+      .modal h3 { font-size: 24px; text-align: center; margin-bottom: 8px; }
+      .modal .price { font-size: 42px; font-weight: 800; text-align: center; color: var(--tg-theme-text-color); margin: 24px 0; letter-spacing: -1px; }
+      
+      .modal-phone {
+        background: var(--tg-theme-bg-color);
+        padding: 20px;
+        border-radius: var(--radius-m);
+        text-align: center;
+        font-size: 20px;
+        font-weight: 700;
+        font-family: monospace;
+        letter-spacing: 1px;
+        margin: 16px 0 24px;
+        border: 1px solid rgba(255,255,255,0.05);
+      }
+
+      /* --- Status Badge --- */
+      #status-badge {
+        position: fixed;
+        top: calc(var(--safe-area-top) + 12px);
+        right: 16px;
+        background: rgba(255, 159, 10, 0.2);
+        color: #ff9f0a;
+        backdrop-filter: blur(10px);
+        border: 1px solid rgba(255, 159, 10, 0.3);
+        padding: 6px 12px;
+        border-radius: 100px;
+        font-weight: 600;
+        font-size: 12px;
+        opacity: 0;
+        transform: translateY(-20px);
+        transition: all 0.4s;
+        z-index: 90;
+        pointer-events: none;
+      }
+      #status-badge.show { opacity: 1; transform: translateY(0); pointer-events: auto; }
+
+      /* --- Toast --- */
+      #toast {
+        position: fixed;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%) scale(0.9);
+        background: rgba(30, 30, 30, 0.9);
+        color: #fff;
+        padding: 16px 24px;
+        border-radius: 16px;
+        font-weight: 500;
+        box-shadow: 0 10px 40px rgba(0,0,0,0.4);
+        pointer-events: none;
+        opacity: 0;
+        transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+        z-index: 2000;
+        text-align: center;
+        max-width: 80%;
+        backdrop-filter: blur(10px);
+      }
+      #toast.show { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+
+      /* --- Admin Specific --- */
+      .admin-card { padding: 0; }
+      .admin-header {
+        padding: 16px;
+        background: rgba(255,255,255,0.03);
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        border-bottom: 1px solid rgba(255,255,255,0.05);
+      }
+      .username { font-weight: 600; font-size: 15px; }
+      .user-id { font-size: 12px; color: var(--tg-theme-hint-color); font-family: monospace; }
+      .date-badge { font-size: 11px; color: var(--tg-theme-hint-color); }
+      .admin-body { padding: 16px; }
+
+      /* --- Animations --- */
+      @keyframes fadeIn {
+        from { opacity: 0; transform: translateY(10px); }
+        to { opacity: 1; transform: translateY(0); }
+      }
+      
+      .fade-in { animation: fadeIn 0.4s ease-out forwards; }
+      
+      .loader {
+        width: 24px; height: 24px;
+        border: 3px solid rgba(255,255,255,0.1);
+        border-top-color: var(--tg-theme-button-color);
+        border-radius: 50%;
+        margin: 40px auto;
+        animation: spin 1s linear infinite;
+      }
+      @keyframes spin { to { transform: rotate(360deg); } }
+
     </style>
 </head>
 <body>
   <div id="main-app">
-    <div id="status-badge">Ожидание подтверждения...</div>
+    <div id="status-badge">⏳ Ожидает подтверждения</div>
+    
     <div class="container">
-      <h2 id="page-title">Remnawave</h2>
+      <div class="header-title-container">
+          <h1 id="header-title">Remnawave</h1>
+      </div>
+      
+      <h2 id="page-title">Remnawave</h2> <!-- Logic hook preserved -->
+      
       <div id="content">
-        <p class="hint center">Авторизация...</p>
+        <div class="loader"></div>
       </div>
     </div>
   </div>
 
-  <!-- Модальное окно оплаты -->
+  <!-- Payment Modal (Bottom Sheet style) -->
   <div id="payment-modal" class="modal">
     <div class="modal-content">
+      <div class="modal-drag"></div>
       <h3 id="modal-title">Премиум</h3>
+      <p class="hint">Оплата подписки</p>
+      
       <p class="price" id="modal-price">499 ₽</p>
-      <p class="hint">Переведите на номер:</p>
-      <div class="modal-phone" id="modal-phone">+7 (999) 123-45-67</div>
-      <button class="btn secondary" onclick="App.copyPhone()">Скопировать номер</button>
-      <button class="btn primary" onclick="App.confirmPayment()" style="margin-top:16px;">Я оплатил</button>
+      
+      <div class="modal-info-block">
+        <p class="hint center">Переведите точную сумму на номер:</p>
+        <div class="modal-phone" id="modal-phone">+7 (999) 123-45-67</div>
+      </div>
+      
+      <div style="display: flex; gap: 12px;">
+        <button class="btn secondary" onclick="App.copyPhone()">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+            Копировать
+        </button>
+        <button class="btn primary" onclick="App.confirmPayment()">
+            Я оплатил
+        </button>
+      </div>
     </div>
   </div>
 
   <nav class="bottom-nav">
     <div class="nav-item active" data-tab="subscriptions">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+      <!-- Rounded, cleaner icons -->
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
       <div>Подписки</div>
     </div>
     <div class="nav-item" data-tab="purchase">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 0 1-8 0"/></svg>
-      <div>Оформить</div>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 0 1-8 0"/></svg>
+      <div>Тарифы</div>
     </div>
-    <div class="nav-item" data-tab="support">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
-      <div>Поддержка</div>
+    <div class="nav-item" data-tab="tutorial">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+      <div>Инфо</div>
     </div>
     <div class="nav-item" data-tab="admin" id="admin-tab">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-8 0v2m4-10a4 4 0 100-8 4 4 0 000 8z"/></svg>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
       <div>Админ</div>
     </div>
   </nav>
